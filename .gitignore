@@ -1,0 +1,22 @@
+# 忽略 VS 自动生成的数据库和缓存（不管在哪个目录下）
+**/.vs/
+**/ipch/
+**/[Xx]64/
+**/[Dd]ebug/
+**/[Rr]elease/
+
+# 忽略临时文件和图片
+*.ppm
+*.ilk
+*.exe
+*.obj
+*.pdb
+*.suo
+*.user
+*.db
+*.vsidx
+*.tmp
+
+# 忽略所有层级下的 build 文件夹
+**/build/
+build/

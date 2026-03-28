@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="PathTracer-CPP.vcxproj" Id="dbb40885-e9dc-4438-bba6-b73973feb06c" />
+</Solution>
