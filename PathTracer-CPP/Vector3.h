@@ -52,7 +52,6 @@ public:
 		return e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
 	}
 
-
 	bool near_zero() const
 	{
 		auto s = 1e-8;

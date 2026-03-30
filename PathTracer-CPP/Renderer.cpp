@@ -43,7 +43,8 @@ int main()
 					// Diffuse
 					auto albedo = random() * random();
 					sphere_material = make_shared<Lambertian>(albedo);
-					world.add(make_shared<Sphere>(center, 0.2, sphere_material));
+					Point3 center2 = center + Vector3(0, random_double(), 0);
+					world.add(make_shared<Sphere>(center, center2, 0.2, sphere_material));
 				}
 				else if (choose_mat < 0.95)
 				{
@@ -75,8 +76,8 @@ int main()
 	// Create Camera
 	Camera cam;
 	cam.aspect_ratio = 16.0 / 9.0;
-	cam.image_width = 1200;
-	cam.sample_per_pixel = 500;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 100;
 	cam.max_depth = 50;
 
 	cam.vfov = 20;

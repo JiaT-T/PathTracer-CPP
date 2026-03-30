@@ -3,12 +3,30 @@
 class Sphere : public Hittable
 {
 public :
-	Sphere(const Point3& center, double radius, std::shared_ptr<Material> mat) :
-		center(center), radius(std::fmax(0, radius)), mat(mat) {};
+	// Static Sphere
+	Sphere(const Point3& static_center, double radius, std::shared_ptr<Material> mat) :
+		center(Ray(static_center, Vector3(0, 0, 0))), radius(std::fmax(0, radius)), mat(mat) 
+	{
+		auto rVec3 = Vector3(radius, radius, radius);
+		// Create a bounding box for the static sphere,
+		// So that this sphere becomes his incisive sphere
+		bbox = AABB(static_center - rVec3, static_center + rVec3);
+	};
+
+	// Moving Sphere
+	Sphere(const Point3& center1, const Point3& center2, double radius, std::shared_ptr<Material> mat) :
+		center(center1, center2 - center1), radius(std::fmax(0, radius)), mat(mat) 
+	{
+		auto rVec3 = Vector3(radius, radius, radius);
+		AABB box1(center1 - rVec3, center1 + rVec3);
+		AABB box2(center2 - rVec3, center2 + rVec3);
+		bbox = AABB(box1, box2);
+	};
 
 	bool Hit(const Ray& ray, double ray_tmin, double ray_tmax, HitRecord& rec) const override
 	{
-		Vector3 oc = center - ray.origin();
+		Point3 curr_center = center.at(ray.time());
+		Vector3 oc = curr_center - ray.origin();
 		auto a = ray.direction().length_squared();
 		auto h = dot(ray.direction(), oc);
 		auto c = oc.length_squared() - radius * radius;
@@ -31,16 +49,19 @@ public :
 
 		rec.t = root;
 		rec.p = ray.at(rec.t);
-		Vector3 outward_normal = (rec.p - center) / radius;
+		Vector3 outward_normal = (rec.p - curr_center) / radius;
 		rec.set_face_front(ray, outward_normal);
 		rec.mat = mat;
 
 		return true;
 	}
 
+	AABB bounding_box() const override { return bbox; }
+
 private :
-	Point3 center;
+	Ray center;
 	double radius;
 	std::shared_ptr<Material> mat;
+	AABB bbox;
 };
 
