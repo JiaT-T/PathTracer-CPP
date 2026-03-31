@@ -42,6 +42,11 @@ inline Vector3 random(double min, double max)
     return Vector3(random_double(min, max), random_double(min, max), random_double(min, max));
 }
 
+inline int random_int(int min, int max)
+{
+	return static_cast<int>(random_double(min, max + 1));
+}
+
 inline Vector3 random_unit_vector()
 {
 	while (true)

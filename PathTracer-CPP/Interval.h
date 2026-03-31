@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 class Interval
 {
 public :
@@ -24,6 +25,8 @@ public :
 		auto padding = delta / 2.0;
 		return Interval(min - padding, max + padding);
 	}
+
+	double size() const { return max - min; }
 
 	double min;
 	double max;

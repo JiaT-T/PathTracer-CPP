@@ -15,10 +15,12 @@ public :
 	// You may ask: Why a coordinate value can build the boudary of the box?
 	// The reason is: The face where the coordinate value located in is the boundary of the box
 	// For example, if the x value is defined, then the face is the YoZ plane where the x value is the same as the coordinate value 
-	AABB(const Point3& a, const Point3& b) : 
-		x(std::fmin(a.x(), b.x()), std::fmax(a.x(), b.x())),
-		y(std::fmin(a.y(), b.y()), std::fmax(a.y(), b.y())),
-		z(std::fmin(a.z(), b.z()), std::fmax(a.z(), b.z())) {}
+	AABB(const Point3& a, const Point3& b)
+	{
+		x = (a[0] <= b[0]) ? Interval(a[0], b[0]) : Interval(b[0], a[0]);
+		y = (a[1] <= b[1]) ? Interval(a[1], b[1]) : Interval(b[1], a[1]);
+		z = (a[2] <= b[2]) ? Interval(a[2], b[2]) : Interval(b[2], a[2]);
+	}
 
 	AABB(const AABB& box1, const AABB& box2)
 	{
@@ -47,13 +49,29 @@ public :
 			auto t0 = (ax.min - origin[axis]) * axDirInv;
 			auto t1 = (ax.max - origin[axis]) * axDirInv;
 
-			ray_t.min = std::fmax(ray_t.min, std::fmin(t0, t1));
-			ray_t.max = std::fmin(ray_t.max, std::fmax(t0, t1));
+			// If the ray is pointing to the negative direction of the axis, 
+			// then swap t0 and t1, 
+			// which means that the ray will hit the max face of the box before hitting the min face
+			if (axDirInv < 0) std::swap(t0, t1);
+
+			// Update the ray_t according to the intersection with the current axis-aligned face of the box
+			if (t0 > ray_t.min) ray_t.min = t0;
+			if (t1 < ray_t.max) ray_t.max = t1;
+
 			if (ray_t.max <= ray_t.min) return false;
 		}
 		return true;
 	}
+
+	// Returns the index of the longest axis of the bounding box
+	int longest_axis() const
+	{
+		if (x.size() < y.size()) return y.size() < z.size() ? 2 : 1;
+		else return x.size() < z.size() ? 2 : 0;
+	}
+
+	static const AABB empty, universe;
 };
 
-
-
+const AABB AABB::empty = AABB(Interval(infinity, -infinity), Interval(infinity, -infinity), Interval(infinity, -infinity));
+const AABB AABB::universe = AABB(Interval(-infinity, infinity), Interval(-infinity, infinity), Interval(-infinity, infinity));

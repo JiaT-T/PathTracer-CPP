@@ -139,7 +139,8 @@ private :
 			return Color(0, 0, 0);
 
 		HitRecord rec;
-		if (world.Hit(ray, 0.001, infinity, rec))
+		Interval ray_t(0, infinity);
+		if (world.Hit(ray, ray_t, rec))
 		{
 			Ray scattered;
 			Color attenuation;

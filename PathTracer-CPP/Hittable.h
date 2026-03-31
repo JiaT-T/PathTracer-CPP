@@ -11,6 +11,8 @@ public :
 	double t;
 	bool front_face;
 	std::shared_ptr<Material> mat;
+	double u;
+	double v;
 
 	// outward_normal is normalized
 	void set_face_front(const Ray& ray, const Vector3& outward_normal)
@@ -24,7 +26,7 @@ class Hittable
 {
 public : 
 	virtual ~Hittable() = default;
-	virtual bool Hit(const Ray& ray, double ray_tmin, double ray_tmax, HitRecord& rec) const = 0;
+	virtual bool Hit(const Ray& ray, Interval& ray_t, HitRecord& rec) const = 0;
 	virtual AABB bounding_box() const = 0;
 };
 

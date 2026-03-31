@@ -23,7 +23,7 @@ public :
 		bbox = AABB(box1, box2);
 	};
 
-	bool Hit(const Ray& ray, double ray_tmin, double ray_tmax, HitRecord& rec) const override
+	bool Hit(const Ray& ray, Interval& ray_t, HitRecord& rec) const override
 	{
 		Point3 curr_center = center.at(ray.time());
 		Vector3 oc = curr_center - ray.origin();
@@ -38,12 +38,12 @@ public :
 		auto sqrtd = std::sqrt(discriminant);
 		// Fristly, consider whether the closest intersection point can be clamped in the correct range
 		auto root = (h - sqrtd) / a;
-		if (root < ray_tmin || ray_tmax < root)
+		if (root < ray_t.min || ray_t.max < root)
 		{
 			// If not, update the root to the other solution
 			root = (h + sqrtd) / a;
 			// Try again
-			if (root < ray_tmin || ray_tmax < root)
+			if (root < ray_t.min || ray_t.max < root)
 				return false;  // If still not, which means absolutely cannot hit the effective area
 		}
 
