@@ -10,15 +10,21 @@
 
 void Bouncing_Spheres();
 void Checker_Spheres();
+void Earth();
+void Perlin_Spheres();
 
 int main()
 {
-	switch (2)
+	switch (4)
 	{
 	case 1:
 		Bouncing_Spheres(); break;
 	case 2:
 		Checker_Spheres();  break;
+	case 3:
+		Earth(); break;
+	case 4:
+		Perlin_Spheres(); break;
 	}
 }
 
@@ -111,6 +117,60 @@ void Checker_Spheres()
 	world.add(std::make_shared<Sphere>(Point3(0, -10, 0), 10, std::make_shared<Lambertian>(checker)));
 
 	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 100;
+	cam.max_depth = 50;
+
+	cam.vfov = 20;
+	cam.lookfrom = Point3(13, 2, 3);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+
+	cam.defocus_angle = 0;
+
+	std::clog << "Start rendering...\n";
+	{
+		// Timing
+		Timer timer;
+		// Rendering
+		cam.Render(world);
+	}
+}
+
+void Earth()
+{
+	auto earth_texture = std::make_shared<Image_Texture>("earthmap.jpg");
+	auto earth_surface = std::make_shared<Lambertian>(earth_texture);
+	auto globe = std::make_shared<Sphere>(Point3(0, 0, 0), 2, earth_surface);
+
+	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 100;
+	cam.max_depth = 50;
+
+	cam.vfov = 20;
+	cam.lookfrom = Point3(0, 0, 12);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+
+	cam.defocus_angle = 0;
+
+	cam.Render(Hittable_List(globe));
+}
+
+void Perlin_Spheres()
+{
+	Hittable_List world;
+
+	auto perlin_texture = std::make_shared<Noise_Texture>();
+	world.add(make_shared<Sphere>(Point3(0, -1000, 0), 1000, make_shared<Lambertian>(perlin_texture)));
+	world.add(make_shared<Sphere>(Point3(0, 2, 0), 2, make_shared<Lambertian>(perlin_texture)));
+
+	Camera cam;
+
 	cam.aspect_ratio = 16.0 / 9.0;
 	cam.image_width = 400;
 	cam.sample_per_pixel = 100;

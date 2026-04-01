@@ -1,6 +1,8 @@
 #pragma once
 #include<memory>
 #include "Color.h"
+#include "rtw_stb_image.h"
+#include "Perlin_Noise.h"
 class Texture
 {
 public :
@@ -41,4 +43,42 @@ private :
 	double scaleInv;
 	std::shared_ptr<Texture> even;
 	std::shared_ptr<Texture> odd;
+};
+
+class Image_Texture : public Texture
+{
+public :
+	Image_Texture(const char* filename) : image(filename) {}
+	Color value(double u, double v, const Point3& p) const override
+	{
+		// If there is no image data, return magenta as a debugging aid.
+		if (image.height() <= 0) return Color(1, 0, 1);
+
+		// Clamp input texture coordinates to [0,1] x [1,0]
+		u = Interval(0, 1).Clamp(u);
+		v = 1.0 - Interval(0, 1).Clamp(v); // Flip V to image coordinates
+
+		auto i = u * image.width();
+		auto j = v * image.height();
+		auto pixel = image.pixel_data(i, j);
+
+		auto color_scale = 1.0 / 255.0;
+		return Color(color_scale * pixel[0], color_scale * pixel[1], color_scale * pixel[2]);
+	}
+
+private :
+	rtw_image image;
+};
+
+class Noise_Texture : public Texture
+{
+public :
+	Noise_Texture() {}
+	Color value(double u, double v, const Point3& p) const override
+	{
+		return Color(1, 1, 1) * perlin_noise.noise(p);
+	}
+
+private :
+	Perlin perlin_noise;
 };
