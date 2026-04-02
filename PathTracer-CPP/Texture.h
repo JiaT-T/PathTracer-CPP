@@ -3,12 +3,15 @@
 #include "Color.h"
 #include "rtw_stb_image.h"
 #include "Perlin_Noise.h"
+
 class Texture
 {
 public :
 	virtual ~Texture() = default;
 	virtual Color value(double u, double v, const Point3& p) const = 0;
 };
+
+
 
 class Solid_Color : public Texture
 {
@@ -20,6 +23,8 @@ public :
 private :
 	Color albedo;
 };
+
+
 
 class Checker_Texture : public Texture
 {
@@ -44,6 +49,8 @@ private :
 	std::shared_ptr<Texture> even;
 	std::shared_ptr<Texture> odd;
 };
+
+
 
 class Image_Texture : public Texture
 {
@@ -70,15 +77,18 @@ private :
 	rtw_image image;
 };
 
+
+
 class Noise_Texture : public Texture
 {
 public :
-	Noise_Texture() {}
+	Noise_Texture(double scale) : scale(scale) {}
 	Color value(double u, double v, const Point3& p) const override
 	{
-		return Color(1, 1, 1) * perlin_noise.noise(p);
+		return Color(.5, .5, .5) * (1.0 + std::sin(scale * p.z() + 10 * perlin_noise.turb(p, 7)));
 	}
 
 private :
 	Perlin perlin_noise;
+	double scale;
 };

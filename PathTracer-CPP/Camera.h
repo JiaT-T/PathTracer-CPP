@@ -13,10 +13,10 @@ public :
 	int    sample_per_pixel = 100;
 	int    max_depth        = 10;
 
-	double vfov = 90;
+	double  vfov     = 90;
 	Vector3 lookfrom = Point3(0, 0, 0);
-	Vector3 lookat = Point3(0, 0, -1);
-	Vector3 up = Vector3(0, 1, 0);
+	Vector3 lookat   = Point3(0, 0, -1);
+	Vector3 up       = Vector3(0, 1, 0);
 
 	double defocus_angle = 0;  // Variation angle of rays through each pixel
 	double focus_dist = 10;    // Distance from camera lookfrom point to plane of perfect focus
@@ -139,7 +139,7 @@ private :
 			return Color(0, 0, 0);
 
 		HitRecord rec;
-		Interval ray_t(0, infinity);
+		Interval ray_t(0.001, infinity);
 		if (world.Hit(ray, ray_t, rec))
 		{
 			Ray scattered;

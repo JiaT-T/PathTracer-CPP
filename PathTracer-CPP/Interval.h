@@ -19,7 +19,13 @@ public :
 		return x;
 	}
 
-	// Panding the boundary of the interval by delta, use for handling the grazing cases
+	bool contains(const double t) const
+	{
+		return min <= t && t <= max;
+	}
+
+	// Panding the boundary of the interval by delta,
+	// use for handling the grazing cases
 	Interval expand(double delta) const
 	{
 		auto padding = delta / 2.0;

@@ -1,4 +1,5 @@
 #pragma once
+#include "My_Common.h"	
 #include "Interval.h"
 #include "Vector3.h"
 #include "Ray.h"
@@ -9,7 +10,10 @@ public :
 
 	AABB() {}
 
-	AABB(const Interval& x, const Interval& y, const Interval& z) : x(x), y(y), z(z) {}
+	AABB(const Interval& x, const Interval& y, const Interval& z) : x(x), y(y), z(z) 
+	{
+		pad_to_minimums();
+	}
 
 	// Input two points, which are the opposite corners of the box, and construct the AABB
 	// You may ask: Why a coordinate value can build the boudary of the box?
@@ -27,6 +31,8 @@ public :
 		x = Interval(box1.x, box2.x);
 		y = Interval(box1.y, box2.y);
 		z = Interval(box1.z, box2.z);
+
+		pad_to_minimums();
 	}
 
 	const Interval& axis_interval(int axis) const
@@ -71,6 +77,16 @@ public :
 	}
 
 	static const AABB empty, universe;
+
+private :
+	void pad_to_minimums()
+	{
+		// Ensure that the size of the box is not too small, which can cause numerical issues in ray-box intersection tests
+		double delta = 0.0001;
+		if (x.size() < delta) x = x.expand(delta);
+		if (y.size() < delta) y = y.expand(delta);
+		if (z.size() < delta) z = z.expand(delta);
+	}
 };
 
 const AABB AABB::empty = AABB(Interval(infinity, -infinity), Interval(infinity, -infinity), Interval(infinity, -infinity));

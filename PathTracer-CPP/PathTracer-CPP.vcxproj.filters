@@ -71,5 +71,8 @@
     <ClInclude Include="Perlin_Noise.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Quad.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

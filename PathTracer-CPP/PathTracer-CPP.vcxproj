@@ -141,6 +141,7 @@
     <ClInclude Include="Material.h" />
     <ClInclude Include="My_Common.h" />
     <ClInclude Include="Perlin_Noise.h" />
+    <ClInclude Include="Quad.h" />
     <ClInclude Include="Ray.h" />
     <ClInclude Include="rtw_stb_image.h" />
     <ClInclude Include="Sphere.h" />

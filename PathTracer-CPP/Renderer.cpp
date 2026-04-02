@@ -7,11 +7,13 @@
 #include "BVH.h"
 #include "Timer.h"
 #include "Texture.h"
+#include "Quad.h"
 
 void Bouncing_Spheres();
 void Checker_Spheres();
 void Earth();
 void Perlin_Spheres();
+void Quads();
 
 int main()
 {
@@ -25,6 +27,8 @@ int main()
 		Earth(); break;
 	case 4:
 		Perlin_Spheres(); break;
+	case 5:
+		Quads(); break;	
 	}
 }
 
@@ -165,7 +169,7 @@ void Perlin_Spheres()
 {
 	Hittable_List world;
 
-	auto perlin_texture = std::make_shared<Noise_Texture>();
+	auto perlin_texture = std::make_shared<Noise_Texture>(4);
 	world.add(make_shared<Sphere>(Point3(0, -1000, 0), 1000, make_shared<Lambertian>(perlin_texture)));
 	world.add(make_shared<Sphere>(Point3(0, 2, 0), 2, make_shared<Lambertian>(perlin_texture)));
 
@@ -173,11 +177,50 @@ void Perlin_Spheres()
 
 	cam.aspect_ratio = 16.0 / 9.0;
 	cam.image_width = 400;
-	cam.sample_per_pixel = 100;
+	cam.sample_per_pixel = 200;
 	cam.max_depth = 50;
 
 	cam.vfov = 20;
 	cam.lookfrom = Point3(13, 2, 3);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+
+	cam.defocus_angle = 0;
+
+	std::clog << "Start rendering...\n";
+	{
+		// Timing
+		Timer timer;
+		// Rendering
+		cam.Render(world);
+	}
+}
+
+void Quads()
+{
+	Hittable_List world;
+
+	auto left_red = make_shared<Lambertian>(Color(1.0, 0.2, 0.2));
+	auto back_green = make_shared<Lambertian>(Color(0.2, 1.0, 0.2));
+	auto right_blue = make_shared<Lambertian>(Color(0.2, 0.2, 1.0));
+	auto upper_orange = make_shared<Lambertian>(Color(1.0, 0.5, 0.0));
+	auto lower_teal = make_shared<Lambertian>(Color(0.2, 0.8, 0.8));
+
+	world.add(make_shared<Quad>(Point3(-3, -2, 5), Vector3(0, 0, -4), Vector3(0, 4, 0), left_red));
+	world.add(make_shared<Quad>(Point3(-2, -2, 0), Vector3(4, 0, 0), Vector3(0, 4, 0), back_green));
+	world.add(make_shared<Quad>(Point3(3, -2, 1), Vector3(0, 0, 4), Vector3(0, 4, 0), right_blue));
+	world.add(make_shared<Quad>(Point3(-2, 3, 1), Vector3(4, 0, 0), Vector3(0, 0, 4), upper_orange));
+	world.add(make_shared<Quad>(Point3(-2, -3, 5), Vector3(4, 0, 0), Vector3(0, 0, -4), lower_teal));
+
+	Camera cam;
+
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 100;
+	cam.max_depth = 50;
+
+	cam.vfov = 80;
+	cam.lookfrom = Point3(0, 0, 9);
 	cam.lookat = Point3(0, 0, 0);
 	cam.up = Vector3(0, 1, 0);
 
