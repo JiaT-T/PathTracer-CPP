@@ -36,5 +36,19 @@ public :
 
 	double min;
 	double max;
+
+	static const Interval universe;
 };
+
+Interval operator+(const Interval& a, double b)
+{
+	return Interval(a.min + b, a.max + b);
+}
+
+Interval operator+(double b, const Interval& a)
+{
+	return a+ b;
+}
+
+const Interval Interval::universe = Interval(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
 

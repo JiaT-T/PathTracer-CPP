@@ -57,6 +57,8 @@ public:
 		auto s = 1e-8;
 		return (std::fabs(e[0]) < s) && (std::fabs(e[1]) < s) && (std::fabs(e[2]) < s);
 	}
+
+	static Vector3 random(double a, double b);
 };
 using Point3 = Vector3;
 
@@ -137,4 +139,9 @@ inline Point3 random_in_unit_disk()
 		if (p.length_squared() < 1)
 			return p;
 	}
+}
+
+Vector3 Point3::random(double a, double b)
+{
+	return Point3(random_double(a, b), random_double(a, b), random_double(a, b));
 }

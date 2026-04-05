@@ -26,7 +26,7 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
-	bool Hit(const Ray& ray, Interval& ray_t, HitRecord& rec) const override
+	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
 		// No hit if the ray is parallel to the plane
 		auto denom = dot(n, ray.direction());

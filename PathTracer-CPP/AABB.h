@@ -91,3 +91,13 @@ private :
 
 const AABB AABB::empty = AABB(Interval(infinity, -infinity), Interval(infinity, -infinity), Interval(infinity, -infinity));
 const AABB AABB::universe = AABB(Interval(-infinity, infinity), Interval(-infinity, infinity), Interval(-infinity, infinity));
+
+AABB operator+(const AABB& box, const Vector3& offset)
+{
+	return AABB(box.x + offset.x(), box.y + offset.y(), box.z + offset.z());
+}
+
+AABB operator+(const Vector3& offset, const AABB& box)
+{
+	return box + offset;
+}

@@ -74,5 +74,8 @@
     <ClInclude Include="Quad.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Constant_Medium.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

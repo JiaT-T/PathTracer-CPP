@@ -46,7 +46,7 @@ public :
 		}
 	}
 
-	bool Hit(const Ray& ray, Interval& ray_t, HitRecord& rec) const override
+	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
 		if (!bbox.hit(ray, ray_t))
 			return false;

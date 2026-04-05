@@ -23,7 +23,7 @@ public :
 		bbox = AABB(box1, box2);
 	};
 
-	bool Hit(const Ray& ray, Interval& ray_t, HitRecord& rec) const override
+	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
 		Point3 curr_center = center.at(ray.time());
 		Vector3 oc = curr_center - ray.origin();

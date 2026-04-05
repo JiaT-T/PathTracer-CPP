@@ -21,7 +21,7 @@ public :
 		bbox = AABB(bbox, object->bounding_box());
 	}
 
-	bool Hit(const Ray& ray, Interval& ray_t, HitRecord& rec) const override
+	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
 		HitRecord temp_rec;
 		bool hitAnything = false;
