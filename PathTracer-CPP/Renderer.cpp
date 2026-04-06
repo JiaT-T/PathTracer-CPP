@@ -22,7 +22,7 @@ void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_dept
 
 int main()
 {
-	switch (10)
+	switch (7)
 	{
 		case 1:  Bouncing_Spheres();					  break;
 		case 2:  Checker_Spheres();						  break;

@@ -43,10 +43,13 @@ public :
 			for (int i = 0; i < image_width; i++)
 			{
 				Color pixel_color(0, 0, 0);
-				for (int sample = 0; sample < sample_per_pixel; sample++)
+				for (int s_j = 0; s_j < sqrt_spp; s_j++)
 				{
-					Ray r = get_ray(i, j);
-					pixel_color += ray_color(r, max_depth, world);
+					for (int s_i = 0; s_i < sqrt_spp; s_i++)
+					{
+						Ray r = get_ray(i, j, s_i, s_j);
+						pixel_color += ray_color(r, max_depth, world);
+					}
 				}
 				write_color(out, pixel_color * pixel_sample_scale);
 			}
@@ -57,6 +60,8 @@ public :
 private :
 	int     image_height;       // Rendered image height
 	double  pixel_sample_scale; // Color scale factor for a sum of pixel samples
+	int		sqrt_spp;           // Square root of number of samples per pixel
+	double  recip_sqrt_spp;     // 1 / sqrt_spp
 	Point3  camera_center;      // Camera center
 	Point3  pixel00_center;     // Location of pixel 0, 0
 	Vector3 pixel_delta_u;      // Offset to pixel to the right
@@ -72,6 +77,10 @@ private :
 		// Ensure the height always greater than 1
 		image_height = (image_height < 1) ? 1 : image_height;
 
+		sqrt_spp = std::sqrt(sample_per_pixel);
+		recip_sqrt_spp = 1.0 / sqrt_spp;
+		pixel_sample_scale = 1.0 / (sqrt_spp * sqrt_spp);
+
 		camera_center = lookfrom;
 
 		// Camera
@@ -79,7 +88,6 @@ private :
 		double h = std::tan(theta / 2);
 		auto viewport_height = 2 * h * focus_dist;
 		auto viewport_width = viewport_height * (double(image_width) / image_height);
-		pixel_sample_scale = 1.0 / sample_per_pixel;
 
 		w = normalize(lookfrom - lookat);
 		u = normalize(cross(up, w));
@@ -109,11 +117,20 @@ private :
 		return Vector3(random_double() - 0.5, random_double() - 0.5, 0);
 	}
 
+	Vector3 sample_square_stratified(int s_i, int s_j) const
+	{
+		// Remap 2D point per pixel to [-0.5, 0.5]
+		auto pixel_x = ((s_i + random_double()) * recip_sqrt_spp) - 0.5;
+		auto pixel_y = ((s_j + random_double()) * recip_sqrt_spp) - 0.5;
+
+		return Vector3(pixel_x, pixel_y, 0);
+	}
+
 	// According to the offset from sample_square(), 
 	// Casting rays randomly around the location: (i, j)
-	Ray get_ray(int i, int j) const
+	Ray get_ray(int i, int j, int s_i, int s_j) const
 	{
-		auto offset = sample_square();
+		auto offset = sample_square_stratified(s_i, s_j);
 		auto pixel_sample = pixel00_center +
 							((i + offset.x()) * pixel_delta_u) +
 							((j + offset.y()) * pixel_delta_v);

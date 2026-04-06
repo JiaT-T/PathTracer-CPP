@@ -15,10 +15,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Renderer.cpp">
+    <ClCompile Include="rtw_stb_image.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="rtw_stb_image.cpp">
+    <ClCompile Include="Renderer.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
