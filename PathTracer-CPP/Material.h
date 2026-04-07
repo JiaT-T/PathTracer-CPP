@@ -10,6 +10,7 @@ public:
 
 	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const { return false; }
 	virtual Color emitted(double u, double v, const Point3& p) const { return Color(0, 0, 0); }
+	virtual double Scattering_PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
 };
 
 
@@ -23,11 +24,19 @@ public :
 	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const override
 	{
 		auto scatter_direcion = rec.n + random_unit_vector();
+		//auto scatter_direcion = random_on_hemisphere(rec.n);
 		if(scatter_direcion.near_zero())
 			scatter_direcion = rec.n;
 		scattered = Ray(rec.p, scatter_direcion, ray_in.time());
 		attenuation = tex->value(rec.u, rec.v, rec.p);
 		return true;
+	}
+
+	double Scattering_PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
+	{
+		auto cos_theta = dot(rec.n, normalize(scattered.direction()));
+		return cos_theta < 0 ? 0 : cos_theta / pi;
+		//return 1.0 / (2 * pi);
 	}
 
 private : 
