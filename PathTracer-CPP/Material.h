@@ -10,7 +10,7 @@ public:
 	virtual ~Material() = default;
 
 	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const { return false; }
-	virtual Color emitted(double u, double v, const Point3& p) const { return Color(0, 0, 0); }
+	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
 	virtual double Scattering_PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
 };
 
@@ -117,8 +117,9 @@ public :
 	Diffuse_Light(std::shared_ptr<Texture> tex) : tex(tex) {}
 	Diffuse_Light(const Color& emit) : tex(std::make_shared<Solid_Color>(emit)) {}
 
-	Color emitted(double u, double v, const Point3& p) const override
+	Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const override
 	{
+		if (!rec.front_face) return Color(0, 0, 0);
 		return tex->value(u, v, p);
 	}
 

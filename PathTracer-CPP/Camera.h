@@ -164,13 +164,27 @@ private :
 		Ray scattered;
 		Color attenuation;
 		double pdf_value;
-		Color emitted_color = rec.mat->emitted(rec.u, rec.v, rec.p);
+		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
 
 		if (!rec.mat->Scatter(ray, rec, attenuation, scattered, pdf_value))
 			return emitted_color;
 
+		auto light_random_pos = Point3(random_double(213, 343), 554, random_double(227, 332));
+		auto to_light = light_random_pos - rec.p;
+		auto squared_distance = to_light.length_squared();
+		to_light = normalize(to_light);
+
+		if (dot(rec.n, to_light) < 0.0) return emitted_color;
+
+		double light_area = (343 - 213) * (332 - 227);
+		// In local space, the normal usually is (0, 1, 0), thus the cosine is equal to y
+		auto light_cosine = std::fabs(to_light.y());
+		if (light_cosine < 0.000001) return emitted_color;
+
+		pdf_value = squared_distance / (light_area * light_cosine);
+		scattered = Ray(rec.p, to_light, ray.time());
+
 		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
-		pdf_value = scattering_pdf;
 
 		Color scattered_color = (attenuation * ray_color(scattered, depth - 1, world) * scattering_pdf) / pdf_value;
 
