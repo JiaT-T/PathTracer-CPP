@@ -163,13 +163,14 @@ private :
 
 		Ray scattered;
 		Color attenuation;
+		double pdf_value;
 		Color emitted_color = rec.mat->emitted(rec.u, rec.v, rec.p);
 
-		if (!rec.mat->Scatter(ray, rec, attenuation, scattered))
+		if (!rec.mat->Scatter(ray, rec, attenuation, scattered, pdf_value))
 			return emitted_color;
 
 		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
-		double pdf_value = scattering_pdf;
+		pdf_value = scattering_pdf;
 
 		Color scattered_color = (attenuation * ray_color(scattered, depth - 1, world) * scattering_pdf) / pdf_value;
 

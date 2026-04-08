@@ -141,7 +141,20 @@ inline Point3 random_in_unit_disk()
 	}
 }
 
-Vector3 Point3::random(double a, double b)
+inline Vector3 Point3::random(double a, double b)
 {
 	return Point3(random_double(a, b), random_double(a, b), random_double(a, b));
+}
+
+inline Vector3 random_cosine_dir()
+{
+	auto r1 = random_double();
+	auto r2 = random_double();
+
+	auto phi = 2 * pi * r1;
+	auto x = std::cos(phi) * std::sqrt(r2);
+	auto y = std::sin(phi) * std::sqrt(r2);
+	auto z = std::sqrt(1 - r2);
+
+	return Vector3(x, y, z);
 }

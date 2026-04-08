@@ -2,13 +2,14 @@
 #include "Hittable.h"
 #include "My_Common.h"
 #include "Texture.h"
+#include "ONB.h"
 
 class Material
 {
 public:
 	virtual ~Material() = default;
 
-	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const { return false; }
+	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const { return false; }
 	virtual Color emitted(double u, double v, const Point3& p) const { return Color(0, 0, 0); }
 	virtual double Scattering_PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
 };
@@ -21,14 +22,18 @@ public :
 	Lambertian(const Color& albedo) : tex(std::make_shared<Solid_Color>(albedo)) {}
 	Lambertian(std::shared_ptr<Texture> tex) : tex(tex) {}
 
-	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
 	{
-		auto scatter_direcion = rec.n + random_unit_vector();
+		// Create Orthonormal Basis
+		ONB uvw(rec.n);
+		auto scatter_direcion = uvw.transform(random_cosine_dir());
+
 		//auto scatter_direcion = random_on_hemisphere(rec.n);
 		if(scatter_direcion.near_zero())
 			scatter_direcion = rec.n;
-		scattered = Ray(rec.p, scatter_direcion, ray_in.time());
+		scattered = Ray(rec.p, normalize(scatter_direcion), ray_in.time());
 		attenuation = tex->value(rec.u, rec.v, rec.p);
+		pdf = dot(uvw.w(), scattered.direction()) / pi;
 		return true;
 	}
 
@@ -50,7 +55,7 @@ class Metal : public Material
 public :
 	Metal(const Color& albedo, double fuzz) : albedo(albedo), fuzz(fuzz < 1 ? fuzz : 1) {}
 
-	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
 	{
 		Vector3 reflected = reflect(ray_in.direction(), rec.n);
 		reflected = normalize(reflected) + fuzz * random_unit_vector();
@@ -71,7 +76,7 @@ class Dielectric : public Material
 public : 
 	Dielectric(double ri) : refraction_index(ri) {};
 
-	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
 	{
 		// The glass surface absorbs nothing
 		attenuation = Color(1.0, 1.0, 1.0);
@@ -129,12 +134,15 @@ public :
 	isotropic(const Color& albedo) : tex(std::make_shared<Solid_Color>(albedo)) {}
 	isotropic(std::shared_ptr<Texture> tex) : tex(tex) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
 	{
 		scattered = Ray(rec.p, random_unit_vector(), ray_in.time());
 		attenuation = tex->value(rec.u, rec.v, rec.p);
+		pdf = 1.0 / (4.0 * pi);
 		return true;
 	}
+
+	double Scattering_PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override { return 1.0 / (4.0 * pi); }
 
 private :
 	std::shared_ptr<Texture> tex;

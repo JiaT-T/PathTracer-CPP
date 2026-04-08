@@ -316,7 +316,7 @@ void Cornell_Box()
 	box2 = make_shared<Translation>(box2, Vector3(130, 0, 65));
 	world.add(box2);
 
-	//world = Hittable_List(std::make_shared<BVH_Node>(world));
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
 
 	// Camera
 	Camera cam;
