@@ -10,6 +10,8 @@ public :
 		Q(Q), u(u), v(v), mat(mat) 
 	{
 		auto normal = cross(u, v);
+		// The length of normal is equal to the area of parallelogram of u and v
+		area = normal.length();
 		n = normalize(normal);
 		D = dot(n, Q);
 		w = normal / dot(normal, normal);
@@ -62,12 +64,30 @@ public :
 		return true;
 	}
 
+	double pdf_value(const Point3& origin, const Vector3& direction) const override
+	{
+		HitRecord rec;
+		if (!this->Hit(Ray(origin, direction), Interval(0.0001, infinity), rec)) return 0;
+
+		auto squared_distance = (rec.t * rec.t) * direction.length_squared();
+		auto cosine = std::fabs(dot(rec.n, direction) / direction.length());
+
+		return squared_distance / (cosine * area);
+	}
+
+	Vector3 random(const Point3& origin) const override
+	{
+		auto p = Q + (random_double() * u) + (random_double() * v);
+		return p - origin;
+	}
+
 private :
 	Point3 Q;
 	Vector3 u, v;
 	Vector3 n;
 	double D;
 	Vector3 w;
+	double area;
 	std::shared_ptr<Material> mat;
 	AABB bbox;
 };

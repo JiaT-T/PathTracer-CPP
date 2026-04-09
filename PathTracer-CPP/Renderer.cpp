@@ -316,6 +316,11 @@ void Cornell_Box()
 	box2 = make_shared<Translation>(box2, Vector3(130, 0, 65));
 	world.add(box2);
 
+	// Lights
+	auto empty_material = std::shared_ptr<Material>();
+	Quad lights(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), empty_material);
+
+	// BVH
 	world = Hittable_List(std::make_shared<BVH_Node>(world));
 
 	// Camera
@@ -323,7 +328,7 @@ void Cornell_Box()
 
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 600;
-	cam.sample_per_pixel = 10;
+	cam.sample_per_pixel = 1000;
 	cam.max_depth = 50;
 	cam.background = Color(0, 0, 0);
 
@@ -339,7 +344,7 @@ void Cornell_Box()
 		// Timing
 		Timer timer;
 		// Rendering
-		cam.Render(world);
+		cam.Render(world, lights);
 	}
 }
 

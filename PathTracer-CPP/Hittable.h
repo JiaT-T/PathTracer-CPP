@@ -28,6 +28,8 @@ public :
 	virtual ~Hittable() = default;
 	virtual bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const = 0;
 	virtual AABB bounding_box() const = 0;
+	virtual double pdf_value(const Point3& origin, const Vector3& direction) const { return 0.0; }
+	virtual Vector3 random(const Point3& origin) const { return Vector3(1.0, 0.0, 0.0); } 
 };
 
 class Translation : public Hittable

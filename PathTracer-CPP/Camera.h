@@ -3,6 +3,7 @@
 #include "Hittable.h"
 #include "My_Common.h"
 #include "Material.h"
+#include "PDF.h"
 
 class Camera
 {
@@ -22,6 +23,7 @@ public :
 	double defocus_angle = 0;  // Variation angle of rays through each pixel
 	double focus_dist = 10;    // Distance from camera lookfrom point to plane of perfect focus
 
+	// Ver.1
 	void Render(const Hittable& world)
 	{
 		initialize();
@@ -49,6 +51,42 @@ public :
 					{
 						Ray r = get_ray(i, j, s_i, s_j);
 						pixel_color += ray_color(r, max_depth, world);
+					}
+				}
+				write_color(out, pixel_color * pixel_sample_scale);
+			}
+		}
+		std::clog << "\rDone.                 \n";
+	}
+
+	// Ver.2
+	void Render(const Hittable& world, const Hittable& lights)
+	{
+		initialize();
+
+		// Create an output file stream
+		std::ofstream out("image.ppm");
+		if (!out.is_open())
+		{
+			std::cerr << "Error: Cannot open file.\n";
+			return;
+		}
+
+		// Renderer
+		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+
+		for (int j = 0; j < image_height; j++)
+		{
+			std::clog << "\rScanlines remaining: " << (image_height - j) << ' ' << std::flush;
+			for (int i = 0; i < image_width; i++)
+			{
+				Color pixel_color(0, 0, 0);
+				for (int s_j = 0; s_j < sqrt_spp; s_j++)
+				{
+					for (int s_i = 0; s_i < sqrt_spp; s_i++)
+					{
+						Ray r = get_ray(i, j, s_i, s_j);
+						pixel_color += ray_color(r, max_depth, world, lights);
 					}
 				}
 				write_color(out, pixel_color * pixel_sample_scale);
@@ -149,6 +187,7 @@ private :
 		return camera_center + (p[0] * defocus_disk_u) + (p[1] * defocus_disk_v);
 	}
 
+	// Ver.1
 	Color ray_color(const Ray& ray, const int depth, const Hittable& world)
 	{
 		// If reach the max depth, return black
@@ -169,24 +208,49 @@ private :
 		if (!rec.mat->Scatter(ray, rec, attenuation, scattered, pdf_value))
 			return emitted_color;
 
-		auto light_random_pos = Point3(random_double(213, 343), 554, random_double(227, 332));
-		auto to_light = light_random_pos - rec.p;
-		auto squared_distance = to_light.length_squared();
-		to_light = normalize(to_light);
-
-		if (dot(rec.n, to_light) < 0.0) return emitted_color;
-
-		double light_area = (343 - 213) * (332 - 227);
-		// In local space, the normal usually is (0, 1, 0), thus the cosine is equal to y
-		auto light_cosine = std::fabs(to_light.y());
-		if (light_cosine < 0.000001) return emitted_color;
-
-		pdf_value = squared_distance / (light_area * light_cosine);
-		scattered = Ray(rec.p, to_light, ray.time());
+		Cosine_PDF surface_pdf(rec.n);
+		scattered = Ray(rec.p, surface_pdf.generate(), ray.time());
+		pdf_value = surface_pdf.value(scattered.direction());
 
 		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
 
 		Color scattered_color = (attenuation * ray_color(scattered, depth - 1, world) * scattering_pdf) / pdf_value;
+
+		return emitted_color + scattered_color;
+	}
+
+	// Ver.2
+	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights)
+	{
+		// If reach the max depth, return black
+		// And end the recursion
+		if (depth <= 0)
+			return Color(0, 0, 0);
+
+		HitRecord rec;
+
+		Interval ray_t(0.001, infinity);
+		if (!world.Hit(ray, ray_t, rec)) return background;
+
+		Ray scattered;
+		Color attenuation;
+		double pdf_value;
+		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
+
+		if (!rec.mat->Scatter(ray, rec, attenuation, scattered, pdf_value))
+			return emitted_color;
+
+		auto p1 = std::make_shared<Hittable_PDF>(lights, rec.p);
+		auto p2 = std::make_shared<Cosine_PDF>(rec.n);
+		Mixture_PDF mixture_pdf(p1, p2);
+
+		scattered = Ray(rec.p, mixture_pdf.generate(), ray.time());
+		pdf_value = mixture_pdf.value(scattered.direction());
+
+		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
+
+		Color sample_color = ray_color(scattered, depth - 1, world, lights);
+		Color scattered_color = (attenuation * sample_color * scattering_pdf) / pdf_value;
 
 		return emitted_color + scattered_color;
 	}
