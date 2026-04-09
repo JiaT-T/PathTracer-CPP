@@ -203,9 +203,10 @@ private :
 		Ray scattered;
 		Color attenuation;
 		double pdf_value;
+		Scattered_Record s_rec;
 		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
 
-		if (!rec.mat->Scatter(ray, rec, attenuation, scattered, pdf_value))
+		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
 		Cosine_PDF surface_pdf(rec.n);
@@ -235,14 +236,17 @@ private :
 		Ray scattered;
 		Color attenuation;
 		double pdf_value;
+		Scattered_Record s_rec;
 		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
 
-		if (!rec.mat->Scatter(ray, rec, attenuation, scattered, pdf_value))
+		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
-		auto p1 = std::make_shared<Hittable_PDF>(lights, rec.p);
-		auto p2 = std::make_shared<Cosine_PDF>(rec.n);
-		Mixture_PDF mixture_pdf(p1, p2);
+		if (s_rec.skip_pdf)
+			return s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights);
+
+		auto p_light = std::make_shared<Hittable_PDF>(lights, rec.p);
+		Mixture_PDF mixture_pdf(p_light, s_rec.p_pdf);
 
 		scattered = Ray(rec.p, mixture_pdf.generate(), ray.time());
 		pdf_value = mixture_pdf.value(scattered.direction());
@@ -250,7 +254,7 @@ private :
 		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
 
 		Color sample_color = ray_color(scattered, depth - 1, world, lights);
-		Color scattered_color = (attenuation * sample_color * scattering_pdf) / pdf_value;
+		Color scattered_color = (s_rec.attenuation * sample_color * scattering_pdf) / pdf_value;
 
 		return emitted_color + scattered_color;
 	}

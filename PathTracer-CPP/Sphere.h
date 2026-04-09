@@ -1,4 +1,5 @@
 #pragma once
+#include "ONB.h"
 #include "Hittable.h"
 class Sphere : public Hittable
 {
@@ -67,9 +68,43 @@ public :
 		v = theta / pi;
 	}
 
+	double pdf_value(const Point3& origin, const Vector3& direction) const override
+	{
+		HitRecord rec;
+		if (!this->Hit(Ray(origin, direction), Interval(0.001, infinity), rec)) return 0;
+
+		auto squared_distanced = (center.at(0) - origin).length_squared();
+		auto max_cosine_theta = std::sqrt(1 - radius * radius / squared_distanced);
+		auto solid_angle = 2.0 * pi * (1.0 - max_cosine_theta);
+
+		return 1.0 / solid_angle;
+	}
+
+	Vector3 random(const Point3& origin) const override
+	{
+		Vector3 dir = center.at(0) - origin;
+		double squared_distanced = dir.length_squared();
+		ONB uvw(dir);
+
+		return uvw.transform(random_to_sphere(radius, squared_distanced));
+	}
+
 private :
 	Ray center;
 	double radius;
 	std::shared_ptr<Material> mat;
 	AABB bbox;
+
+	static Vector3 random_to_sphere(double radius, double squared_distance)
+	{
+		auto r1 = random_double();
+		auto r2 = random_double();
+		auto z = 1 + r2 * (std::sqrt(1 - radius * radius / squared_distance) - 1);
+
+		auto phi = 2 * pi * r1;
+		auto x = std::cos(phi) * std::sqrt(1 - z * z);
+		auto y = std::sin(phi) * std::sqrt(1 - z * z);
+
+		return Vector3(x, y, z);
+	}
 };

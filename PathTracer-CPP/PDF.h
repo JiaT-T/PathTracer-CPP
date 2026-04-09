@@ -1,8 +1,7 @@
 #pragma once
 #include<array>
-
-#include "My_Common.h"
 #include "ONB.h"
+#include "Hittable.h"
 
 class PDF
 {

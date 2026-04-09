@@ -41,6 +41,24 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
+	double pdf_value(const Point3& origin, const Vector3& direction) const override
+	{
+		if (objects.empty()) return 0.0;
+
+		auto weight = 1.0 / objects.size();
+		auto sum = 0.0;
+		for (const auto& object : objects)
+			sum += weight * object->pdf_value(origin, direction);
+
+		return sum;
+	}
+
+	Vector3 random(const Point3& origin) const override
+	{
+		auto size = static_cast<int>(objects.size());
+		return objects[random_int(0, size - 1)]->random(origin);
+	}
+
 private :
 	AABB bbox;
 };

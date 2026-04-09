@@ -2,14 +2,25 @@
 #include "Hittable.h"
 #include "My_Common.h"
 #include "Texture.h"
-#include "ONB.h"
+#include "PDF.h"
+
+class Scattered_Record
+{
+public :
+	Color attenuation;
+	std::shared_ptr<PDF> p_pdf;
+	bool skip_pdf;
+	Ray skip_pdf_ray;
+};
+
+
 
 class Material
 {
 public:
 	virtual ~Material() = default;
 
-	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const { return false; }
+	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const { return false; }
 	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
 	virtual double Scattering_PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
 };
@@ -22,7 +33,7 @@ public :
 	Lambertian(const Color& albedo) : tex(std::make_shared<Solid_Color>(albedo)) {}
 	Lambertian(std::shared_ptr<Texture> tex) : tex(tex) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
 		// Create Orthonormal Basis
 		ONB uvw(rec.n);
@@ -31,9 +42,9 @@ public :
 		//auto scatter_direcion = random_on_hemisphere(rec.n);
 		if(scatter_direcion.near_zero())
 			scatter_direcion = rec.n;
-		scattered = Ray(rec.p, normalize(scatter_direcion), ray_in.time());
-		attenuation = tex->value(rec.u, rec.v, rec.p);
-		pdf = dot(uvw.w(), scattered.direction()) / pi;
+		s_rec.attenuation = tex->value(rec.u, rec.v, rec.p);
+		s_rec.p_pdf = std::make_shared<Cosine_PDF>(rec.n);
+		s_rec.skip_pdf = false;
 		return true;
 	}
 
@@ -55,13 +66,17 @@ class Metal : public Material
 public :
 	Metal(const Color& albedo, double fuzz) : albedo(albedo), fuzz(fuzz < 1 ? fuzz : 1) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
 		Vector3 reflected = reflect(ray_in.direction(), rec.n);
 		reflected = normalize(reflected) + fuzz * random_unit_vector();
-		scattered = Ray(rec.p, reflected, ray_in.time());
-		attenuation = albedo;
-		return (dot(rec.n, scattered.direction()) > 0);
+
+		s_rec.attenuation = albedo;
+		s_rec.p_pdf = nullptr;
+		s_rec.skip_pdf = true;
+		s_rec.skip_pdf_ray = Ray(rec.p, reflected, ray_in.time());
+
+		return true;
 	}
 
 private :
@@ -76,10 +91,12 @@ class Dielectric : public Material
 public : 
 	Dielectric(double ri) : refraction_index(ri) {};
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
 		// The glass surface absorbs nothing
-		attenuation = Color(1.0, 1.0, 1.0);
+		s_rec.attenuation = Color(1.0, 1.0, 1.0);
+		s_rec.p_pdf = nullptr;
+		s_rec.skip_pdf = true;
 		double ri = rec.front_face ? (1.0 / refraction_index) : refraction_index;
 
 		Vector3 unit_direction = normalize(ray_in.direction());
@@ -93,7 +110,7 @@ public :
 		else
 			direction = refract(unit_direction, rec.n, ri);
 
-		scattered = Ray(rec.p, direction, ray_in.time());
+		s_rec.skip_pdf_ray = Ray(rec.p, direction, ray_in.time());
 		return true;
 	}
 
@@ -135,11 +152,11 @@ public :
 	isotropic(const Color& albedo) : tex(std::make_shared<Solid_Color>(albedo)) {}
 	isotropic(std::shared_ptr<Texture> tex) : tex(tex) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Color& attenuation, Ray& scattered, double& pdf) const override
+	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
-		scattered = Ray(rec.p, random_unit_vector(), ray_in.time());
-		attenuation = tex->value(rec.u, rec.v, rec.p);
-		pdf = 1.0 / (4.0 * pi);
+		s_rec.attenuation = tex->value(rec.u, rec.v, rec.p);
+		s_rec.p_pdf = std::make_shared<Sphere_PDF>();
+		s_rec.skip_pdf = false;
 		return true;
 	}
 

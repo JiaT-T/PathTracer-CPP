@@ -1,4 +1,5 @@
 #pragma once
+#include<cmath>
 #include "Vector3.h"
 #include "Interval.h"
 
@@ -16,6 +17,11 @@ void write_color(std::ostream& out, const Color& color)
 	auto r = color.x();
 	auto g = color.y();
 	auto b = color.z();
+
+	// Replace NaN components with zero.
+	if (std::isnan(r)) r = 0.0;
+	if (std::isnan(g)) g = 0.0;
+	if (std::isnan(b)) b = 0.0;
 
 	// Linear Space --> Gamma Space
 	r = linear_to_gamma(r);

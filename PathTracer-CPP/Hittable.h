@@ -135,7 +135,7 @@ public :
 	AABB bounding_box() const override { return bbox; }
 
 private :
-	std::shared_ptr < Hittable> object;
+	std::shared_ptr<Hittable> object;
 	double sin_theta;
 	double cos_theta;
 	AABB bbox;

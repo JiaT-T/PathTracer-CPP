@@ -307,18 +307,25 @@ void Cornell_Box()
 
 
 	std::shared_ptr<Hittable> box1 = Box(Point3(0, 0, 0), Point3(165, 330, 165), white);
+	//shared_ptr<Material> aluminum = make_shared<Metal>(Color(0.8, 0.85, 0.88), 0.0);
+	//shared_ptr<Hittable> box1 = Box(Point3(0, 0, 0), Point3(165, 330, 165), aluminum);
 	box1 = make_shared<Rotate_Y>(box1, 15);
 	box1 = make_shared<Translation>(box1, Vector3(265, 0, 295));
 	world.add(box1);
 
-	std::shared_ptr<Hittable> box2 = Box(Point3(0, 0, 0), Point3(165, 165, 165), white);
-	box2 = make_shared<Rotate_Y>(box2, -18);
-	box2 = make_shared<Translation>(box2, Vector3(130, 0, 65));
-	world.add(box2);
+	//std::shared_ptr<Hittable> box2 = Box(Point3(0, 0, 0), Point3(165, 165, 165), white);
+	//box2 = make_shared<Rotate_Y>(box2, -18);
+	//box2 = make_shared<Translation>(box2, Vector3(130, 0, 65));
+	//world.add(box2);
+
+	auto glass = std::make_shared<Dielectric>(1.5);
+	world.add(make_shared<Sphere>(Point3(190, 90, 190), 90, glass));
 
 	// Lights
 	auto empty_material = std::shared_ptr<Material>();
-	Quad lights(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), empty_material);
+	Hittable_List lights;
+	lights.add(make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), empty_material));
+	lights.add(make_shared<Sphere>(Point3(190, 90, 190), 90, empty_material));
 
 	// BVH
 	world = Hittable_List(std::make_shared<BVH_Node>(world));
@@ -328,7 +335,7 @@ void Cornell_Box()
 
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 600;
-	cam.sample_per_pixel = 1000;
+	cam.sample_per_pixel = 1500;
 	cam.max_depth = 50;
 	cam.background = Color(0, 0, 0);
 
