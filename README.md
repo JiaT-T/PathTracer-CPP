@@ -4,6 +4,17 @@
 
 目前仓库已经不只是“能出图”的基础光线追踪器，而是逐步演进为一个包含材质系统、纹理系统、BVH、体积介质、正交基、概率密度函数与直接光照采样的现代路径追踪练习工程。
 
+仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
+
+## 渲染效果
+
+### Cornell Box
+
+![Cornell Box](docs/images/cornell-box.png)
+
+### Bouncing Spheres
+
+![Bouncing Spheres](docs/images/bouncing-spheres.png)
 ## 项目特点
 
 - 使用 C++20 编写，当前以 Visual Studio 工程为主
@@ -68,6 +79,10 @@
 
 ```text
 PathTracer-CPP/
+├─ docs/
+│  └─ images/
+│     ├─ bouncing-spheres.png
+│     └─ cornell-box.png
 ├─ README.md
 └─ PathTracer-CPP/
    ├─ Renderer.cpp            # 场景入口与主函数
