@@ -10,6 +10,8 @@
 #include "Quad.h"
 #include "Constant_Medium.h"
 
+#include "Triangle.h"
+
 void Bouncing_Spheres();
 void Checker_Spheres();
 void Earth();
@@ -19,21 +21,23 @@ void Lights_Test();
 void Cornell_Box();
 void Cornell_Smoke();
 void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_depth);
+void Triangle_Test();
 
 int main()
 {
-	switch (7)
+	switch (10)
 	{
-		case 1:  Bouncing_Spheres();					  break;
-		case 2:  Checker_Spheres();						  break;
-		case 3:  Earth();								  break;
-		case 4:  Perlin_Spheres();						  break;
-		case 5:  Quads();								  break;	
-		case 6:  Lights_Test();						  	  break;
-		case 7:  Cornell_Box();							  break;
-		case 8:  Cornell_Smoke();						  break;
-		case 9:  Chapter_Two_Final_Scene(800, 10000, 40); break;
-		default: Chapter_Two_Final_Scene(400,   250,  4); break;
+		case  1:  Bouncing_Spheres();					    break;
+		case  2:  Checker_Spheres();					    break;
+		case  3:  Earth();								    break;
+		case  4:  Perlin_Spheres();						    break;
+		case  5:  Quads();								    break;	
+		case  6:  Lights_Test();						    break;
+		case  7:  Cornell_Box();						    break;
+		case  8:  Cornell_Smoke();						    break;
+		case  9:  Chapter_Two_Final_Scene(800, 10000, 40);  break;
+		case 10:  Triangle_Test();                          break;
+		default:  Chapter_Two_Final_Scene(400,   250,  4);  break;
 	}
 }
 
@@ -493,5 +497,46 @@ void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_dept
 		Timer timer;
 		// Rendering
 		cam.Render(world);
+	}
+}
+
+void Triangle_Test()
+{
+	Hittable_List world;
+
+	auto red = make_shared<Lambertian>(Color(1.0, 0.2, 0.2));
+	world.add(std::make_shared<Triangle>(Point3(-2.0, -2.0, -1.0), Point3(2.0, -2.0, -1.0), Point3(0.0, 2.0, -1.0), red));
+
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto empty_material = std::shared_ptr<Material>();
+
+	Hittable_List lights;
+
+	world.add(std::make_shared<Quad>(Point3(-2, 5, -2), Vector3(4, 0, 0), Vector3(0, 0, 4), light_mat));
+	lights.add(std::make_shared<Quad>(Point3(-2, 5, -2), Vector3(4, 0, 0), Vector3(0, 0, 4), empty_material));
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 10;
+	cam.max_depth = 50;
+
+	cam.vfov = 80;
+	cam.lookfrom = Point3(0, 0, 9);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+
+	cam.background = Color(0.70, 0.80, 1.00);
+
+	std::clog << "Start rendering...\n";
+	{
+		// Timing
+		Timer timer;
+		// Rendering
+		cam.Render(world, lights);
 	}
 }
