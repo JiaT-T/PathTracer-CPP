@@ -4,8 +4,6 @@
 
 目前仓库已经不只是“能出图”的基础光线追踪器，而是逐步演进为一个包含材质系统、纹理系统、BVH、体积介质、正交基、概率密度函数与直接光照采样的现代路径追踪练习工程。
 
-仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
-
 ## 项目特点
 
 - 使用 C++20 编写，当前以 Visual Studio 工程为主
@@ -121,6 +119,7 @@ PathTracer-CPP/
 
 - 渲染结果默认写入 `PathTracer-CPP/image.ppm`
 - 程序运行时会在控制台输出剩余扫描行
+- 渲染完成后会输出所用时长
 
 ### 纹理文件说明
 
@@ -146,34 +145,11 @@ PathTracer-CPP/
 - `8`：Cornell Smoke
 - `9`：Chapter Two Final Scene
 
-如果你想切换场景，直接修改 `Renderer.cpp` 中 `switch` 的 case 即可。
-
-## 开发日志（对应 Issues）
-
-这个仓库最大的特点之一，是把实现过程完整沉淀在 GitHub Issues 中。下面是当前开发主线：
-
-- Day 1: [#1 环境搭建与基础数学库实现](https://github.com/JiaT-T/PathTracer-CPP/issues/1)
-- Day 2: [#2 相机渲染管线、抗锯齿、漫反射与 Gamma 校正](https://github.com/JiaT-T/PathTracer-CPP/issues/2)
-- Day 3: [#3 金属 / 电介质材质与景深相机](https://github.com/JiaT-T/PathTracer-CPP/issues/3)
-- Day 4: [#4 动态模糊与 AABB 基础构架](https://github.com/JiaT-T/PathTracer-CPP/issues/4)
-- Day 5: [#5 BVH、AABB 优化与棋盘纹理](https://github.com/JiaT-T/PathTracer-CPP/issues/5)
-- Day 6: [#6 球体 UV、图像纹理与 Perlin Noise](https://github.com/JiaT-T/PathTracer-CPP/issues/6)
-- Day 7: [#7 梯度噪声、大理石纹理、四边形与多个核心 Bug 修复](https://github.com/JiaT-T/PathTracer-CPP/issues/7)
-- Day 8: [#8 发光材质与立方体构建](https://github.com/JiaT-T/PathTracer-CPP/issues/8)
-- Day 9: [#9 实例空间变换与恒定体积介质](https://github.com/JiaT-T/PathTracer-CPP/issues/9)
-- Day 10: [#11 分层采样与 PDF / 蒙特卡洛积分理论](https://github.com/JiaT-T/PathTracer-CPP/issues/11)
-- Day 11: [#13 材质散射与 PDF 架构重构](https://github.com/JiaT-T/PathTracer-CPP/issues/13)
-- Day 12: [#14 ONB、逆变换采样与直接光照](https://github.com/JiaT-T/PathTracer-CPP/issues/14)
-- Day 13: [#15 Mixture PDF、球体重要性采样与数值稳定性修复](https://github.com/JiaT-T/PathTracer-CPP/issues/15)
-
-其中也包含了一些明确的待办事项：
-
-- [#10 待办事项](https://github.com/JiaT-T/PathTracer-CPP/issues/10)
-- [#12 待办事项：Russian Roulette](https://github.com/JiaT-T/PathTracer-CPP/issues/12)
+如果想切换场景，直接修改 `Renderer.cpp` 中 `switch` 的 case 即可。
 
 ## 当前阶段总结
 
-从仓库内容来看，这个项目已经完成了从“基础 Ray Tracing”到“具备现代重要性采样框架的路径追踪器”的一次完整跨越，尤其体现在以下几点：
+从仓库内容来看，项目已经完成了从“基础 Ray Tracing”到“具备现代重要性采样框架的路径追踪器”的一次完整跨越，尤其体现在以下几点：
 
 - 代码结构已经从单纯的 `scatter()` 递归，过渡到“材质物理 + PDF 采样策略”解耦的设计
 - 不再只依赖环境光，而是开始显式采样面积光源
@@ -182,7 +158,7 @@ PathTracer-CPP/
 
 ## 后续可继续推进的方向
 
-根据当前仓库内容与待办 Issue，后续很适合继续扩展：
+根据当前仓库内容与待办 Issue，后续适合继续扩展：
 
 - 用 Russian Roulette 替代固定 `max_depth`
 - 引入 CPU 多线程渲染
@@ -192,4 +168,4 @@ PathTracer-CPP/
 
 ## 说明
 
-本项目 README 根据仓库当前源码结构与 GitHub Issues 内容整理而成，尽量保持与当前实现状态一致。如果后续场景入口、构建方式或功能模块发生变化，建议同步更新本说明文档。
+本项目 README 根据仓库当前源码结构与 GitHub Issues 内容整理而成，尽量保持与当前实现状态一致。如果后续场景入口、构建方式或功能模块发生变化，会同步更新本说明文档。
