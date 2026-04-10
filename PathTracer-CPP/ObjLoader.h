@@ -48,21 +48,47 @@ public:
                 if (fv == 3)
                 {
                     Point3 vertices[3];
+                    Vector3 normals[3];
+                    bool face_has_normals = true;
+
                     for (size_t v = 0; v < 3; v++)
                     {
                         tinyobj::index_t idx = shapes[s].mesh.indices[index_offset + v];
 
-                        // Abstract Vectex's Coordinate
+                        // Abstruct Vertex's Corrinate
                         tinyobj::real_t vx = attrib.vertices[3 * size_t(idx.vertex_index) + 0];
                         tinyobj::real_t vy = attrib.vertices[3 * size_t(idx.vertex_index) + 1];
                         tinyobj::real_t vz = attrib.vertices[3 * size_t(idx.vertex_index) + 2];
-
                         vertices[v] = Point3(vx, vy, vz);
 
-                        // TODO : Abstract Normal
+                        if (idx.normal_index >= 0)
+                        {
+                            tinyobj::real_t nx = attrib.normals[3 * size_t(idx.normal_index) + 0];
+                            tinyobj::real_t ny = attrib.normals[3 * size_t(idx.normal_index) + 1];
+                            tinyobj::real_t nz = attrib.normals[3 * size_t(idx.normal_index) + 2];
+                            normals[v] = Vector3(nx, ny, nz);
+                        }
+                        else
+                        {
+                            // As long as the normals of one vertex are incomplete
+                            // then it's demoted to flat shading directly
+                            face_has_normals = false;
+                        }
                     }
 
-                    mesh_list->add(std::make_shared<Triangle>(vertices[0], vertices[1], vertices[2], default_mat));
+                    // Depending on whether normals have been extracted, 
+                    // a different constructor is invoked.
+                    if (face_has_normals)
+                    {
+                        mesh_list->add(std::make_shared<Triangle>(
+                            vertices[0], vertices[1], vertices[2],
+                            normals[0], normals[1], normals[2], default_mat));
+                    }
+                    else
+                    {
+                        mesh_list->add(std::make_shared<Triangle>(
+                            vertices[0], vertices[1], vertices[2], default_mat));
+                    }
                 }
                 index_offset += fv;
             }
