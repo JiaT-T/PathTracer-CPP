@@ -29,6 +29,14 @@ public:
 		return *this;
 	}
 
+	Vector3& operator-=(const Vector3& v)
+	{
+		e[0] -= v[0];
+		e[1] -= v[1];
+		e[2] -= v[2];
+		return *this;
+	}
+
 	Vector3& operator*=(double d)
 	{
 		e[0] *= d;

@@ -571,10 +571,12 @@ void Teapot()
 	world.add(quad_light);
 	lights.add(quad_light);
 
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
 	Camera cam;
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 400;
-	cam.sample_per_pixel = 400;
+	cam.sample_per_pixel = 50;
 	cam.max_depth = 10;
 
 	cam.vfov = 45;

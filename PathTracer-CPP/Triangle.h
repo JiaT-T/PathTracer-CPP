@@ -6,17 +6,37 @@
 class Triangle : public Hittable
 {
 public :
+	// Flat Shading
 	Triangle(const Point3& v0, const Point3& v1, const Point3& v2, std::shared_ptr<Material> mat) : 
-		v0(v0), v1(v1), v2(v2), mat(mat) 
+		v0(v0), v1(v1), v2(v2), mat(mat), has_vertex_normal(false)
 	{
 		auto edge1 = v1 - v0;
 		auto edge2 = v2 - v0;
 		auto cross_product = cross(edge1, edge2);
 		auto length = cross_product.length();
 		area = 0.5 * length;
-		n = cross_product / length;
+		face_normal = normalize(cross_product);
+		n0 = n1 = n2 = face_normal;
 		set_bounding_box();
 	}
+
+	// Smooth Shading
+	Triangle(const Point3& v0, const Point3& v1, const Point3& v2, 
+			 const Vector3& n0, const Vector3& n1, const Vector3& n2, 
+			 std::shared_ptr<Material> mat) :
+			 v0(v0), v1(v1), v2(v2), n0(n0), n1(n1), n2(n2),
+			 mat(std::move(mat)), has_vertex_normal(true)
+	{
+		auto edge1 = v1 - v0;
+		auto edge2 = v2 - v0;
+		auto cross_product = cross(edge1, edge2);
+		auto length = cross_product.length();
+		area = 0.5 * length;
+		face_normal = cross_product / length;
+
+		set_bounding_box();
+	}
+
 	virtual bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override;
 
 	virtual AABB bounding_box() const override { return bbox; }
@@ -42,7 +62,7 @@ public :
 		if (!this->Hit(Ray(origin, direction), Interval(0.0001, infinity), rec)) return 0;
 
 		auto squared_distance = (rec.t * rec.t) * direction.length_squared();
-		auto cosine = std::fabs(dot(rec.n, direction) / direction.length());
+		auto cosine = std::fabs(dot(face_normal, direction) / direction.length());
 
 		return squared_distance / (cosine * area);
 	}
@@ -62,7 +82,9 @@ public :
 
 private :
 	Point3 v0, v1, v2;
-	Vector3 n;
+	Vector3 face_normal;
+	Vector3 n0, n1, n2;
+	bool has_vertex_normal;
 	std::shared_ptr<Material> mat;
 	AABB bbox;
 	double area;
@@ -92,12 +114,37 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	const double distance = dot(edge2, q) * inv_det;
 	if (!ray_t.contains(distance)) return false;
 
+	auto w = 1.0 - u - v;
+	Vector3 interpolated_normal = normalize(w * n0 + u * n1 + v * n2);
+
 	rec.t = distance;
 	rec.p = ray.at(distance);
-	rec.set_face_front(ray, n);
+
+	Vector3 shading_normal;
+	if (has_vertex_normal)
+	{
+		double w = 1.0 - u - v;
+		shading_normal = w * n0 + u * n1 + v * n2;
+
+		if (shading_normal.length_squared() < 1e-8)
+			shading_normal = face_normal;
+		else
+			shading_normal = normalize(shading_normal);
+	}
+	else
+	{
+		shading_normal = face_normal;
+	}
+
+	if (dot(ray.direction(), face_normal) < 0)
+		rec.p += face_normal * 0.001;
+	else
+		rec.p -= face_normal * 0.001;
+
 	rec.mat = mat;
-	rec.u = u; 
+	rec.u = u;
 	rec.v = v;
+	rec.set_face_front(ray, interpolated_normal);
 
 	return true;
 }
