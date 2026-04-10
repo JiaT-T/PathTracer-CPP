@@ -92,5 +92,11 @@
     <ClInclude Include="Triangle.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ObjLoader.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="external\tiny_obj_loader.h">
+      <Filter>头文件\External</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

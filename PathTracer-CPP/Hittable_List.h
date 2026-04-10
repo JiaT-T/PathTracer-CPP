@@ -55,6 +55,8 @@ public :
 
 	Vector3 random(const Point3& origin) const override
 	{
+		if (objects.empty())
+			return Vector3(1.0, 0.0, 0.0);
 		auto size = static_cast<int>(objects.size());
 		return objects[random_int(0, size - 1)]->random(origin);
 	}
