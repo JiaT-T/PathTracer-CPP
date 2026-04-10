@@ -11,11 +11,17 @@ public :
 	{
 		auto edge1 = v1 - v0;
 		auto edge2 = v2 - v0;
-		n = normalize(cross(edge1, edge2));
+		auto cross_product = cross(edge1, edge2);
+		auto length = cross_product.length();
+		area = 0.5 * length;
+		n = cross_product / length;
+		set_bounding_box();
 	}
 	virtual bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override;
 
-	virtual AABB bounding_box() const
+	virtual AABB bounding_box() const override { return bbox; }
+
+	virtual void set_bounding_box()
 	{
 		Point3 p_min(
 			std::fmin(v0.x(), std::fmin(v1.x(), v2.x())),
@@ -27,16 +33,42 @@ public :
 			std::fmax(v0.y(), std::fmax(v1.y(), v2.y())),
 			std::fmax(v0.z(), std::fmax(v1.z(), v2.z())));
 
-		return AABB(p_min, p_max);
+		bbox = AABB(p_min, p_max);
+	}
+
+	double pdf_value(const Point3& origin, const Vector3& direction) const override
+	{
+		HitRecord rec;
+		if (!this->Hit(Ray(origin, direction), Interval(0.0001, infinity), rec)) return 0;
+
+		auto squared_distance = (rec.t * rec.t) * direction.length_squared();
+		auto cosine = std::fabs(dot(rec.n, direction) / direction.length());
+
+		return squared_distance / (cosine * area);
+	}
+
+	Vector3 random(const Point3& origin) const override
+	{
+		auto sqrted_r1 = std::sqrt(random_double(0, 1));
+		auto r2 = random_double(0, 1);
+
+		auto alpha = 1.0 - sqrted_r1;
+		auto beta = sqrted_r1 * (1.0 - r2);
+		auto gamma = sqrted_r1 * r2;
+
+		auto random_point = alpha * v0 + beta * v1 + gamma * v2;
+		return random_point - origin;
 	}
 
 private :
 	Point3 v0, v1, v2;
 	Vector3 n;
 	std::shared_ptr<Material> mat;
+	AABB bbox;
+	double area;
 };
 
-bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
+inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 {
 	const Vector3 edge1 = v1 - v0;
 	const Vector3 edge2 = v2 - v0;
