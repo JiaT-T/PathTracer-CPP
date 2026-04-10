@@ -29,6 +29,7 @@
 ### 1. 几何体与空间结构
 
 - 球体与运动球体
+- 三角形 `Triangle`
 - 四边形 `Quad`
 - 由六个四边形拼装的盒子 `Box`
 - 包围盒 `AABB`
@@ -36,6 +37,7 @@
 - 实例平移 `Translation`
 - 绕 Y 轴旋转 `Rotate_Y`
 - 恒定体积介质 `Constant_Medium`
+- OBJ模型加载 `ObjLoader`
 
 ### 2. 材质系统
 
