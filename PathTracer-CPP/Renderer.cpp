@@ -11,6 +11,7 @@
 #include "Constant_Medium.h"
 
 #include "Triangle.h"
+#include "ObjLoader.h"
 
 void Bouncing_Spheres();
 void Checker_Spheres();
@@ -22,10 +23,11 @@ void Cornell_Box();
 void Cornell_Smoke();
 void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_depth);
 void Triangle_Test();
+void Teapot();
 
 int main()
 {
-	switch (10)
+	switch (11)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -37,7 +39,7 @@ int main()
 		case  8:  Cornell_Smoke();						    break;
 		case  9:  Chapter_Two_Final_Scene(800, 10000, 40);  break;
 		case 10:  Triangle_Test();                          break;
-		default:  Chapter_Two_Final_Scene(400,   250,  4);  break;
+		case 11:  Teapot();									break;
 	}
 }
 
@@ -503,40 +505,88 @@ void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_dept
 void Triangle_Test()
 {
 	Hittable_List world;
-
-	auto red = make_shared<Lambertian>(Color(1.0, 0.2, 0.2));
-	world.add(std::make_shared<Triangle>(Point3(-2.0, -2.0, -1.0), Point3(2.0, -2.0, -1.0), Point3(0.0, 2.0, -1.0), red));
-
-	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
-	auto empty_material = std::shared_ptr<Material>();
-
 	Hittable_List lights;
 
-	world.add(std::make_shared<Quad>(Point3(-2, 5, -2), Vector3(4, 0, 0), Vector3(0, 0, 4), light_mat));
-	lights.add(std::make_shared<Quad>(Point3(-2, 5, -2), Vector3(4, 0, 0), Vector3(0, 0, 4), empty_material));
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto gray_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+
+	auto gray_triangle = std::make_shared<Triangle>(Point3(-2.0, -2.0, -1.0),Point3(2.0, -2.0, -1.0),Point3(0.0, 2.0, -1.0),gray_mat);	
+	auto light_triangle = std::make_shared<Triangle>(Point3(-2.0, 5.0, -2.0), Point3(2.0, 5.0, -2.0), Point3(0.0, 5.0, 2.0), light_mat);
+	auto ground = std::make_shared<Quad>(Point3(-5, -2.01, -5),Vector3(10, 0, 0),Vector3(0, 0, 10),gray_mat);
+
+	world.add(ground);
+	world.add(gray_triangle);
+	lights.add(light_triangle);
 
 	world = Hittable_List(std::make_shared<BVH_Node>(world));
 
 	Camera cam;
-
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 400;
-	cam.sample_per_pixel = 10;
-	cam.max_depth = 50;
+	cam.sample_per_pixel = 50;
+	cam.max_depth = 10;
 
 	cam.vfov = 80;
-	cam.lookfrom = Point3(0, 0, 9);
+	cam.lookfrom = Point3(0, 5, 9);
 	cam.lookat = Point3(0, 0, 0);
 	cam.up = Vector3(0, 1, 0);
 	cam.defocus_angle = 0;
-
 	cam.background = Color(0.70, 0.80, 1.00);
 
-	std::clog << "Start rendering...\n";
+	std::clog << "Start rendering Triangle PDF Test...\n";
 	{
-		// Timing
 		Timer timer;
-		// Rendering
+		cam.Render(world, lights);
+	}
+}
+
+void Teapot()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	// Material
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto gray_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+
+
+	// Obj
+	std::clog << "Loading OBJ model...\n";
+	auto model_mesh = ObjLoader::load("Model/teapot.obj", gray_mat);
+
+	if (model_mesh)
+	{
+		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
+
+		world.add(bvh_model);
+		std::clog << "Model loaded and BVH built successfully.\n";
+	}
+	else
+	{
+		std::clog << "Cannot find model!\n";
+	}
+
+	// Light
+	auto quad_light = std::make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	Camera cam;
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 10;
+
+	cam.vfov = 45;
+	cam.lookfrom = Point3(0, 5, 9);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.70, 0.80, 1.00);
+
+	std::clog << "Start rendering Triangle PDF Test...\n";
+	{
+		Timer timer;
 		cam.Render(world, lights);
 	}
 }
