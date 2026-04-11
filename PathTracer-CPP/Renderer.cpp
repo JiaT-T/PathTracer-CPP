@@ -23,11 +23,11 @@ void Cornell_Box();
 void Cornell_Smoke();
 void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_depth);
 void Triangle_Test();
-void Teapot();
+void ObjTest();
 
 int main()
 {
-	switch (11)
+	switch (7)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -39,7 +39,7 @@ int main()
 		case  8:  Cornell_Smoke();						    break;
 		case  9:  Chapter_Two_Final_Scene(800, 10000, 40);  break;
 		case 10:  Triangle_Test();                          break;
-		case 11:  Teapot();									break;
+		case 11:  ObjTest();								break;
 	}
 }
 
@@ -341,7 +341,7 @@ void Cornell_Box()
 
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 600;
-	cam.sample_per_pixel = 1500;
+	cam.sample_per_pixel = 50;
 	cam.max_depth = 50;
 	cam.background = Color(0, 0, 0);
 
@@ -540,7 +540,7 @@ void Triangle_Test()
 	}
 }
 
-void Teapot()
+void ObjTest()
 {
 	Hittable_List world;
 	Hittable_List lights;
@@ -552,13 +552,13 @@ void Teapot()
 
 	// Obj
 	std::clog << "Loading OBJ model...\n";
-	auto model_mesh = ObjLoader::load("Model/teapot.obj", gray_mat);
+	auto model_mesh = ObjLoader::load("Model/dragon.obj", gray_mat);
 
 	if (model_mesh)
 	{
 		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
 
-		world.add(bvh_model);
+		world.add(make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
 		std::clog << "Model loaded and BVH built successfully.\n";
 	}
 	else
@@ -579,7 +579,7 @@ void Teapot()
 	cam.sample_per_pixel = 50;
 	cam.max_depth = 10;
 
-	cam.vfov = 45;
+	cam.vfov = 80;
 	cam.lookfrom = Point3(0, 5, 9);
 	cam.lookat = Point3(0, 0, 0);
 	cam.up = Vector3(0, 1, 0);

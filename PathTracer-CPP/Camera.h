@@ -242,6 +242,20 @@ private :
 		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
+		// =====================
+		// Russian Roulette
+		// =====================
+		// The first three samlps are the main force of whole randering
+		// So we will use RR before these three samples
+		double p_survival = 1.0;
+		int bounce = max_depth - depth;
+		if (bounce < 3)
+		{
+			p_survival = p_survival = std::fmax(s_rec.attenuation.x(), std::fmax(s_rec.attenuation.y(), s_rec.attenuation.z()));
+			p_survival = std::clamp(p_survival, 0.0001, 0.9999);
+			if (p_survival < random_double()) return emitted_color;
+		}
+
 		if (s_rec.skip_pdf)
 			return s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights);
 
@@ -254,7 +268,7 @@ private :
 		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
 
 		Color sample_color = ray_color(scattered, depth - 1, world, lights);
-		Color scattered_color = (s_rec.attenuation * sample_color * scattering_pdf) / pdf_value;
+		Color scattered_color = (s_rec.attenuation * sample_color * scattering_pdf) / (pdf_value * p_survival);
 
 		return emitted_color + scattered_color;
 	}
