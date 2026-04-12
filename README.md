@@ -177,9 +177,7 @@ PathTracer-CPP/
 
 根据当前仓库内容与待办 Issue，后续适合继续扩展：
 
-- 用 Russian Roulette 替代固定 `max_depth`
 - 引入 CPU 多线程渲染
-- 支持三角形与更一般的网格几何
 - 扩展任意物体的体积渲染
 - 进一步引入 MIS、多种光源策略或更完整的采样框架
 
