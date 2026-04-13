@@ -1,6 +1,8 @@
 # PathTracer-CPP
 
-一个使用 C++ 编写的路径追踪学习项目，整体实现路线参考了 Ray Tracing 系列教程(https://github.com/RayTracing/raytracing.github.io)
+一个使用 C++ 编写的路径追踪学习项目，整体实现路线参考了 Ray Tracing 系列教程
+(https://github.com/RayTracing/raytracing.github.io)
+
 目前仓库为包含材质系统、纹理系统、BVH、体积介质、正交基、概率密度函数与直接光照采样的现代路径追踪练习工程。
 
 仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
