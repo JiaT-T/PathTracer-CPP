@@ -137,6 +137,7 @@ PathTracer-CPP/
 - 渲染结果默认写入 `PathTracer-CPP/image.ppm`
 - 程序运行时会在控制台输出剩余扫描行
 - 渲染完成后会输出所用时长
+- 目前未支持ppm文件的直接浏览，可以访问https://www.cs.rhodes.edu/welshc/COMP141_F16/ppmReader.html来查看渲染结果
 
 ### 纹理文件说明
 
