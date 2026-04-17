@@ -104,6 +104,7 @@ PathTracer-CPP/
    ├─ Color.h                 # 颜色写出
    ├─ My_Common.h             # 公共常量与随机工具
    ├─ Timer.h                 # 渲染计时
+   ├─ OjbLoader.h             # OBJ模型加载
    ├─ rtw_stb_image.*         # 图像纹理加载
    ├─ images/earthmap.jpg     # 示例纹理
    ├─ image.ppm               # 当前渲染输出
