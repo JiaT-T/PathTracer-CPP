@@ -1,8 +1,9 @@
 # PathTracer-CPP
 
-一个使用 C++ 编写的路径追踪学习项目，整体实现路线参考了 Ray Tracing 系列教程，并结合仓库中的日更 Issue 持续推进功能、修复 Bug、补充数学与采样理论。
+一个使用 C++ 编写的路径追踪学习项目，整体实现路线参考了 Ray Tracing 系列教程
+(https://github.com/RayTracing/raytracing.github.io)
 
-目前仓库已经不只是“能出图”的基础光线追踪器，而是逐步演进为一个包含材质系统、纹理系统、BVH、体积介质、正交基、概率密度函数与直接光照采样的现代路径追踪练习工程。
+目前仓库为包含材质系统、纹理系统、BVH、体积介质、正交基、概率密度函数与直接光照采样的现代路径追踪练习工程。
 
 仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
 
@@ -29,6 +30,7 @@
 ### 1. 几何体与空间结构
 
 - 球体与运动球体
+- 三角形 `Triangle`
 - 四边形 `Quad`
 - 由六个四边形拼装的盒子 `Box`
 - 包围盒 `AABB`
@@ -36,6 +38,7 @@
 - 实例平移 `Translation`
 - 绕 Y 轴旋转 `Rotate_Y`
 - 恒定体积介质 `Constant_Medium`
+- OBJ模型加载 `ObjLoader`
 
 ### 2. 材质系统
 
@@ -101,6 +104,7 @@ PathTracer-CPP/
    ├─ Color.h                 # 颜色写出
    ├─ My_Common.h             # 公共常量与随机工具
    ├─ Timer.h                 # 渲染计时
+   ├─ OjbLoader.h             # OBJ模型加载
    ├─ rtw_stb_image.*         # 图像纹理加载
    ├─ images/earthmap.jpg     # 示例纹理
    ├─ image.ppm               # 当前渲染输出
@@ -135,6 +139,8 @@ PathTracer-CPP/
 - 渲染结果默认写入 `PathTracer-CPP/image.ppm`
 - 程序运行时会在控制台输出剩余扫描行
 - 渲染完成后会输出所用时长
+- 目前尚未支持ppm文件的直接浏览，可以通过访问https://www.cs.rhodes.edu/welshc/COMP141_F16/ppmReader.html
+  来查看渲染结果
 
 ### 纹理文件说明
 
@@ -169,15 +175,12 @@ PathTracer-CPP/
 - 代码结构已经从单纯的 `scatter()` 递归，过渡到“材质物理 + PDF 采样策略”解耦的设计
 - 不再只依赖环境光，而是开始显式采样面积光源
 - 已经支持 BVH、实例变换、体积介质等更接近真实渲染器的数据组织与场景表达
-- Issues 不只是开发记录，也沉淀了大量图形学推导、数值稳定性分析和踩坑总结
 
 ## 后续可继续推进的方向
 
 根据当前仓库内容与待办 Issue，后续适合继续扩展：
 
-- 用 Russian Roulette 替代固定 `max_depth`
 - 引入 CPU 多线程渲染
-- 支持三角形与更一般的网格几何
 - 扩展任意物体的体积渲染
 - 进一步引入 MIS、多种光源策略或更完整的采样框架
 

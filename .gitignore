@@ -9,7 +9,10 @@
 *.ppm
 *.ilk
 *.exe
+# 忽略所有子文件夹下的 .obj 编译产物
 *.obj
+# 但是不忽略专门存放模型的文件夹
+!Model/*.obj
 *.pdb
 *.suo
 *.user
