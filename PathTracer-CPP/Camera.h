@@ -1,9 +1,13 @@
 #pragma once
+#include <chrono>
 #include <fstream>
+#include <string>
+#include <vector>
 #include "Hittable.h"
 #include "My_Common.h"
 #include "Material.h"
 #include "PDF.h"
+#include "PPMPreviewWindow.h"
 
 class Camera
 {
@@ -14,6 +18,7 @@ public :
 	int    sample_per_pixel = 100;
 	int    max_depth        = 10;
 	Color  background;
+	std::string output_filename = "image.ppm";
 
 	double  vfov     = 90;
 	Vector3 lookfrom = Point3(0, 0, 0);
@@ -23,13 +28,19 @@ public :
 	double defocus_angle = 0;  // Variation angle of rays through each pixel
 	double focus_dist = 10;    // Distance from camera lookfrom point to plane of perfect focus
 
+	int output_height() const
+	{
+		int height = static_cast<int>(image_width / aspect_ratio);
+		return (height < 1) ? 1 : height;
+	}
+
 	// Ver.1
-	void Render(const Hittable& world)
+	void Render(const Hittable& world, PPMPreviewWindow* preview = nullptr)
 	{
 		initialize();
 
 		// Create an output file stream
-		std::ofstream out("image.ppm");
+		std::ofstream out(output_filename);
 		if (!out.is_open())
 		{
 			std::cerr << "Error: Cannot open file.\n";
@@ -38,6 +49,14 @@ public :
 
 		// Renderer
 		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+		std::vector<unsigned char> preview_pixels;
+		auto preview_start_time = std::chrono::steady_clock::now();
+		auto last_preview_update_time = preview_start_time;
+		if (preview)
+		{
+			preview_pixels.assign(static_cast<size_t>(image_width) * image_height * 4, 0);
+			preview->UpdateImage(preview_pixels, 0, 0.0);
+		}
 
 		for (int j = 0; j < image_height; j++)
 		{
@@ -53,19 +72,48 @@ public :
 						pixel_color += ray_color(r, max_depth, world);
 					}
 				}
-				write_color(out, pixel_color * pixel_sample_scale);
+				Color final_color = pixel_color * pixel_sample_scale;
+				write_color(out, final_color);
+
+				if (preview)
+				{
+					Color_Bytes bytes = to_color_bytes(final_color);
+					size_t pixel_index = static_cast<size_t>(j * image_width + i) * 4;
+					preview_pixels[pixel_index + 0] = bytes.b;
+					preview_pixels[pixel_index + 1] = bytes.g;
+					preview_pixels[pixel_index + 2] = bytes.r;
+					preview_pixels[pixel_index + 3] = 255;
+
+					auto now = std::chrono::steady_clock::now();
+					if (!preview->IsClosed() &&
+						(i == image_width - 1 ||
+						 std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033))
+					{
+						std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+						preview->UpdateImage(preview_pixels, j, elapsed_seconds.count());
+						last_preview_update_time = now;
+					}
+				}
+			}
+
+			if (preview && !preview->IsClosed())
+			{
+				auto now = std::chrono::steady_clock::now();
+				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+				preview->UpdateImage(preview_pixels, j + 1, elapsed_seconds.count());
+				last_preview_update_time = now;
 			}
 		}
 		std::clog << "\rDone.                 \n";
 	}
 
 	// Ver.2
-	void Render(const Hittable& world, const Hittable& lights)
+	void Render(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
 	{
 		initialize();
 
 		// Create an output file stream
-		std::ofstream out("image.ppm");
+		std::ofstream out(output_filename);
 		if (!out.is_open())
 		{
 			std::cerr << "Error: Cannot open file.\n";
@@ -74,6 +122,14 @@ public :
 
 		// Renderer
 		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+		std::vector<unsigned char> preview_pixels;
+		auto preview_start_time = std::chrono::steady_clock::now();
+		auto last_preview_update_time = preview_start_time;
+		if (preview)
+		{
+			preview_pixels.assign(static_cast<size_t>(image_width) * image_height * 4, 0);
+			preview->UpdateImage(preview_pixels, 0, 0.0);
+		}
 
 		for (int j = 0; j < image_height; j++)
 		{
@@ -89,7 +145,36 @@ public :
 						pixel_color += ray_color(r, max_depth, world, lights);
 					}
 				}
-				write_color(out, pixel_color * pixel_sample_scale);
+				Color final_color = pixel_color * pixel_sample_scale;
+				write_color(out, final_color);
+
+				if (preview)
+				{
+					Color_Bytes bytes = to_color_bytes(final_color);
+					size_t pixel_index = static_cast<size_t>(j * image_width + i) * 4;
+					preview_pixels[pixel_index + 0] = bytes.b;
+					preview_pixels[pixel_index + 1] = bytes.g;
+					preview_pixels[pixel_index + 2] = bytes.r;
+					preview_pixels[pixel_index + 3] = 255;
+
+					auto now = std::chrono::steady_clock::now();
+					if (!preview->IsClosed() &&
+						(i == image_width - 1 ||
+						 std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033))
+					{
+						std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+						preview->UpdateImage(preview_pixels, j, elapsed_seconds.count());
+						last_preview_update_time = now;
+					}
+				}
+			}
+
+			if (preview && !preview->IsClosed())
+			{
+				auto now = std::chrono::steady_clock::now();
+				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+				preview->UpdateImage(preview_pixels, j + 1, elapsed_seconds.count());
+				last_preview_update_time = now;
 			}
 		}
 		std::clog << "\rDone.                 \n";

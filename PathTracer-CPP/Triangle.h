@@ -114,9 +114,6 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	const double distance = dot(edge2, q) * inv_det;
 	if (!ray_t.contains(distance)) return false;
 
-	auto w = 1.0 - u - v;
-	Vector3 interpolated_normal = normalize(w * n0 + u * n1 + v * n2);
-
 	rec.t = distance;
 	rec.p = ray.at(distance);
 
@@ -144,7 +141,7 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	rec.mat = mat;
 	rec.u = u;
 	rec.v = v;
-	rec.set_face_front(ray, interpolated_normal);
+	rec.set_face_front(ray, shading_normal);
 
 	return true;
 }

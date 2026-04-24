@@ -9,6 +9,7 @@
 #include "Texture.h"
 #include "Quad.h"
 #include "Constant_Medium.h"
+#include "PPMPreviewWindow.h"
 
 #include "Triangle.h"
 #include "ObjLoader.h"
@@ -24,10 +25,32 @@ void Cornell_Smoke();
 void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_depth);
 void Triangle_Test();
 void Teapot();
+void RenderAndPreview(Camera& cam, const Hittable& world);
+void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights);
+
+void RenderAndPreview(Camera& cam, const Hittable& world)
+{
+	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
+	Timer timer;
+	cam.Render(world, &preview);
+	const double render_seconds = timer.stop();
+	preview.SetFinished(render_seconds);
+	preview.WaitUntilClosed();
+}
+
+void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights)
+{
+	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
+	Timer timer;
+	cam.Render(world, lights, &preview);
+	const double render_seconds = timer.stop();
+	preview.SetFinished(render_seconds);
+	preview.WaitUntilClosed();
+}
 
 int main()
 {
-	switch (11)
+	switch (8)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -37,7 +60,7 @@ int main()
 		case  6:  Lights_Test();						    break;
 		case  7:  Cornell_Box();						    break;
 		case  8:  Cornell_Smoke();						    break;
-		case  9:  Chapter_Two_Final_Scene(800, 10000, 40);  break;
+		case  9:  Chapter_Two_Final_Scene(800, 512, 40);    break;
 		case 10:  Triangle_Test();                          break;
 		case 11:  Teapot();									break;
 	}
@@ -117,12 +140,7 @@ void Bouncing_Spheres()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Checker_Spheres()
@@ -149,12 +167,7 @@ void Checker_Spheres()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Earth()
@@ -179,7 +192,8 @@ void Earth()
 
 	cam.background = Color(0.70, 0.80, 1.00);
 
-	cam.Render(Hittable_List(globe));
+	std::clog << "Start rendering...\n";
+	RenderAndPreview(cam, Hittable_List(globe));
 }
 
 void Perlin_Spheres()
@@ -207,12 +221,7 @@ void Perlin_Spheres()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Quads()
@@ -248,12 +257,7 @@ void Quads()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Lights_Test()
@@ -285,12 +289,7 @@ void Lights_Test()
 	cam.defocus_angle = 0;
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Cornell_Box()
@@ -353,12 +352,7 @@ void Cornell_Box()
 	cam.defocus_angle = 0;
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world, lights);
-	}
+	RenderAndPreview(cam, world, lights);
 }
 
 void Cornell_Smoke()
@@ -406,12 +400,7 @@ void Cornell_Smoke()
 	cam.defocus_angle = 0;
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_depth)
@@ -494,12 +483,7 @@ void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_dept
 	cam.defocus_angle = 0;
 
 	std::clog << "Start rendering...\n";
-	{
-		// Timing
-		Timer timer;
-		// Rendering
-		cam.Render(world);
-	}
+	RenderAndPreview(cam, world);
 }
 
 void Triangle_Test()
@@ -516,6 +500,7 @@ void Triangle_Test()
 
 	world.add(ground);
 	world.add(gray_triangle);
+	world.add(light_triangle);
 	lights.add(light_triangle);
 
 	world = Hittable_List(std::make_shared<BVH_Node>(world));
@@ -534,10 +519,7 @@ void Triangle_Test()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering Triangle PDF Test...\n";
-	{
-		Timer timer;
-		cam.Render(world, lights);
-	}
+	RenderAndPreview(cam, world, lights);
 }
 
 void Teapot()
@@ -587,8 +569,5 @@ void Teapot()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering Triangle PDF Test...\n";
-	{
-		Timer timer;
-		cam.Render(world, lights);
-	}
+	RenderAndPreview(cam, world, lights);
 }
