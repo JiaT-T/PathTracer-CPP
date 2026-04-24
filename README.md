@@ -1,9 +1,6 @@
 # PathTracer-CPP
 
-一个使用 C++ 编写的路径追踪学习项目，整体实现路线参考了 Ray Tracing 系列教程
-(https://github.com/RayTracing/raytracing.github.io)
-
-目前仓库为包含材质系统、纹理系统、BVH、体积介质、正交基、概率密度函数与直接光照采样的现代路径追踪练习工程。
+一个使用 C++20 编写的路径追踪学习项目，整体实现参考了 [Ray Tracing](https://github.com/RayTracing/raytracing.github.io) 系列教程，并在此基础上继续扩展了三角形网格、OBJ 加载、PDF 重要性采样、体积介质和实时预览窗口等功能。
 
 仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
 
@@ -16,35 +13,50 @@
 ### Bouncing Spheres
 
 ![Bouncing Spheres](docs/images/bouncing-spheres.png)
-## 项目特点
 
-- 使用 C++20 编写，当前以 Visual Studio 工程为主
-- 从零实现向量、颜色、射线、相机、求交、材质与纹理系统
-- 支持基于蒙特卡洛积分的递归路径追踪
-- 支持分层采样、重要性采样与混合 PDF
-- 支持程序化纹理、图像纹理、面积光源和体积介质
-- 以 GitHub Issues 记录每日实现内容、原理理解与踩坑修复
+## 更新记录
 
-## 当前已实现能力
+### 2026-04-24
+
+- 新增 `PPMPreviewWindow`，支持渲染时实时窗口预览
+- 预览窗口顶部显示渲染时间与分辨率
+- 支持鼠标滚轮缩放、左键拖拽平移、右键双击重置视图
+- 优化预览刷新逻辑，减少闪白和亮度跳变
+- 修复三角形命中时法线处理问题，统一使用安全的 `shading_normal`
+- 修复 `Triangle_Test()` 中发光三角形未加入 `world` 的问题
+- 新增 `Teapot` 场景入口，并保留 `ObjTest` 网格测试场景
+
+### 2026-04-17
+
+- 合入路径追踪主线更新
+- 完成基于 PDF 的重要性采样与直接光照采样框架
+- 增加 `Mixture_PDF`、`Hittable_PDF`、余弦加权采样和面光源采样相关支持
+
+### 2026-04-13
+
+- 整理 README
+- 明确项目结构、构建方式和场景入口说明
+
+## 已实现功能
 
 ### 1. 几何体与空间结构
 
-- 球体与运动球体
+- 球体与运动球体 `Sphere`
 - 三角形 `Triangle`
 - 四边形 `Quad`
-- 由六个四边形拼装的盒子 `Box`
+- 由六个四边形构成的 `Box`
 - 包围盒 `AABB`
-- 层次包围盒加速结构 `BVH`
-- 实例平移 `Translation`
-- 绕 Y 轴旋转 `Rotate_Y`
+- BVH 加速结构 `BVH`
+- 平移实例 `Translation`
+- 绕 Y 轴旋转实例 `Rotate_Y`
 - 恒定体积介质 `Constant_Medium`
-- OBJ模型加载 `ObjLoader`
+- OBJ 网格加载 `ObjLoader`
 
 ### 2. 材质系统
 
-- 兰伯特漫反射 `Lambertian`
-- 金属材质 `Metal`
-- 电介质 / 玻璃材质 `Dielectric`
+- 漫反射 `Lambertian`
+- 金属 `Metal`
+- 介质 / 玻璃 `Dielectric`
 - 发光材质 `Diffuse_Light`
 - 各向同性介质材质 `isotropic`
 
@@ -54,15 +66,19 @@
 - 棋盘纹理 `Checker_Texture`
 - 图像纹理 `Image_Texture`
 - Perlin Noise 纹理
-- 基于湍流的大理石纹理
+- 基于 Turbulence 的大理石纹理
 
 ### 4. 相机与渲染能力
 
 - PPM 图像输出
-- 抗锯齿多重采样
+- 渲染完成后自动打开窗口预览
+- 渲染过程中实时刷新预览
+- 顶部信息栏显示渲染时间和分辨率
+- 预览窗口缩放 / 拖拽 / 视图重置
+- 多重采样抗锯齿
 - 分层采样 `Stratified Sampling`
 - Gamma 校正
-- 景深模拟
+- 景深
 - 运动模糊
 - 背景颜色控制
 - 直接光照采样
@@ -74,41 +90,64 @@
 - ONB 正交基变换
 - 球面 UV 映射
 - 余弦加权半球采样
+- 面光源采样
 - 球体立体角采样
 - Hittable PDF
-- Monte Carlo 估计与 PDF 分离式架构
+- Monte Carlo 积分与 PDF 分离式结构
+
+## 场景入口
+
+主入口位于 [PathTracer-CPP/Renderer.cpp](PathTracer-CPP/Renderer.cpp)。
+当前通过 `main()` 中的 `switch` 选择场景：
+
+- `1`: Bouncing Spheres
+- `2`: Checker Spheres
+- `3`: Earth
+- `4`: Perlin Spheres
+- `5`: Quads
+- `6`: Lights Test
+- `7`: Cornell Box
+- `8`: Cornell Smoke
+- `9`: Chapter Two Final Scene
+- `10`: Triangle Test
+- `11`: ObjTest
+- `12`: Teapot
 
 ## 项目结构
 
 ```text
-PathTracer-CPP/
+PathTracer/
 ├─ docs/
 │  └─ images/
 │     ├─ bouncing-spheres.png
 │     └─ cornell-box.png
 ├─ README.md
 └─ PathTracer-CPP/
-   ├─ Renderer.cpp            # 场景入口与主函数
-   ├─ Camera.h                # 相机、采样与递归积分
-   ├─ Hittable.h              # 可求交抽象、平移与旋转实例
-   ├─ Hittable_List.h         # 几何集合
-   ├─ Sphere.h                # 球体 / 运动球体
-   ├─ Quad.h                  # 四边形与 Box 构建
-   ├─ Constant_Medium.h       # 恒定体积介质
-   ├─ Material.h              # 材质系统
-   ├─ Texture.h               # 纹理系统
-   ├─ PDF.h                   # PDF 与重要性采样
-   ├─ AABB.h / BVH.h          # 包围盒与加速结构
-   ├─ ONB.h                   # 正交基
-   ├─ Vector3.h / Ray.h       # 数学基础
-   ├─ Color.h                 # 颜色写出
-   ├─ My_Common.h             # 公共常量与随机工具
-   ├─ Timer.h                 # 渲染计时
-   ├─ OjbLoader.h             # OBJ模型加载
-   ├─ rtw_stb_image.*         # 图像纹理加载
-   ├─ images/earthmap.jpg     # 示例纹理
-   ├─ image.ppm               # 当前渲染输出
-   └─ PathTracer-CPP.vcxproj  # Visual Studio 工程
+   ├─ Renderer.cpp
+   ├─ Camera.h
+   ├─ PPMPreviewWindow.h
+   ├─ Hittable.h
+   ├─ Hittable_List.h
+   ├─ Sphere.h
+   ├─ Triangle.h
+   ├─ Quad.h
+   ├─ Constant_Medium.h
+   ├─ Material.h
+   ├─ Texture.h
+   ├─ PDF.h
+   ├─ AABB.h
+   ├─ BVH.h
+   ├─ ONB.h
+   ├─ Vector3.h
+   ├─ Ray.h
+   ├─ Color.h
+   ├─ My_Common.h
+   ├─ Timer.h
+   ├─ ObjLoader.h
+   ├─ external/
+   ├─ images/
+   ├─ Model/
+   └─ PathTracer-CPP.vcxproj
 ```
 
 ## 构建与运行
@@ -122,7 +161,7 @@ PathTracer-CPP/
 
 ### 推荐构建方式
 
-当前仓库中存在可直接打开的 Visual Studio 工程：
+当前仓库提供可直接打开的 Visual Studio 工程：
 
 - `PathTracer-CPP/PathTracer-CPP.vcxproj`
 - `PathTracer-CPP/PathTracer-CPP.slnx`
@@ -131,59 +170,31 @@ PathTracer-CPP/
 
 1. 使用 Visual Studio 打开 `PathTracer-CPP.slnx` 或 `PathTracer-CPP.vcxproj`
 2. 选择 `x64` 平台
-3. 优先使用 `Release` 配置渲染正式图像，`Debug` 更适合调试
-4. 直接运行项目
+3. 使用 `Release` 配置进行正式渲染，`Debug` 配置更适合调试
+4. 运行项目
 
-### 输出结果
+### 运行输出
 
 - 渲染结果默认写入 `PathTracer-CPP/image.ppm`
-- 程序运行时会在控制台输出剩余扫描行
-- 渲染完成后会输出所用时长
-- 目前尚未支持ppm文件的直接浏览，可以通过访问https://www.cs.rhodes.edu/welshc/COMP141_F16/ppmReader.html
-  来查看渲染结果
+- 控制台会输出剩余扫描线和总渲染时间
+- 程序会自动弹出实时预览窗口
+- 预览窗口顶部显示渲染时间和分辨率
 
-### 纹理文件说明
+### 图像纹理说明
 
-项目中的图像纹理通过 `rtw_stb_image.h` 进行搜索，支持以下方式之一：
+项目中的图像纹理通过 `rtw_stb_image.h` 加载，通常可通过以下方式找到纹理文件：
 
-- 直接从当前工作目录加载
-- 从 `images/` 目录加载
-- 通过环境变量 `RTW_IMAGES` 指定纹理目录
+- 当前工作目录
+- `images/` 目录
+- 环境变量 `RTW_IMAGES` 指定的纹理目录
 
-这意味着只要运行目录设置合理，`earthmap.jpg` 通常可以被自动找到。
-
-## 场景入口
-
-主入口位于 `PathTracer-CPP/Renderer.cpp`。当前通过 `main()` 中的 `switch` 选择场景：
-
-- `1`：Bouncing Spheres
-- `2`：Checker Spheres
-- `3`：Earth
-- `4`：Perlin Spheres
-- `5`：Quads
-- `6`：Lights Test
-- `7`：Cornell Box
-- `8`：Cornell Smoke
-- `9`：Chapter Two Final Scene
-
-如果想切换场景，直接修改 `Renderer.cpp` 中 `switch` 的 case 即可。
-
-## 当前阶段总结
-
-从仓库内容来看，项目已经完成了从“基础 Ray Tracing”到“具备现代重要性采样框架的路径追踪器”的一次完整跨越，尤其体现在以下几点：
-
-- 代码结构已经从单纯的 `scatter()` 递归，过渡到“材质物理 + PDF 采样策略”解耦的设计
-- 不再只依赖环境光，而是开始显式采样面积光源
-- 已经支持 BVH、实例变换、体积介质等更接近真实渲染器的数据组织与场景表达
-
-## 后续可继续推进的方向
-
-根据当前仓库内容与待办 Issue，后续适合继续扩展：
+## 当前待办
 
 - 引入 CPU 多线程渲染
-- 扩展任意物体的体积渲染
-- 进一步引入 MIS、多种光源策略或更完整的采样框架
+- 为预览窗口增加暂停、保存快照或状态栏信息
+- 继续扩展更完整的 MIS / 多光源采样策略
+- 增加更多网格场景与材质测试案例
 
 ## 说明
 
-本项目 README 根据仓库当前源码结构与 GitHub Issues 内容整理而成，尽量保持与当前实现状态一致。如果后续场景入口、构建方式或功能模块发生变化，会同步更新本说明文档。
+本 README 已根据当前仓库实现状态重新整理，并同步补充了最近的功能更新。后续如果场景入口、预览能力、构建方式或采样框架继续演进，建议同步更新本文件中的“更新记录”和“已实现功能”章节。
