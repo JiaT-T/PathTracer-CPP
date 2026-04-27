@@ -26,8 +26,8 @@ void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_dept
 void Triangle_Test();
 void ObjTest();
 void Teapot();
-void RenderAndPreview(Camera& cam, const Hittable& world);
-void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights);
+void Sponza();
+void PBR_Test();
 
 void RenderAndPreview(Camera& cam, const Hittable& world)
 {
@@ -38,7 +38,6 @@ void RenderAndPreview(Camera& cam, const Hittable& world)
 	preview.SetFinished(render_seconds);
 	preview.WaitUntilClosed();
 }
-
 void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights)
 {
 	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
@@ -51,7 +50,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (8)
+	switch (11)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -65,6 +64,8 @@ int main()
 		case 10:  Triangle_Test();                          break;
 		case 11:  ObjTest();								break;
 		case 12:  Teapot();									break;
+		case 13:  Sponza();                                 break;
+		case 14:  PBR_Test();                               break;
 	}
 }
 
@@ -542,7 +543,7 @@ void ObjTest()
 	{
 		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
 
-		world.add(make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
+		world.add(std::make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
 		std::clog << "Model loaded and BVH built successfully.\n";
 	}
 	else
@@ -609,6 +610,103 @@ void Teapot()
 	cam.max_depth = 10;
 
 	cam.vfov = 45;
+	cam.lookfrom = Point3(0, 5, 9);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.70, 0.80, 1.00);
+
+	std::clog << "Start rendering Triangle PDF Test...\n";
+	RenderAndPreview(cam, world, lights);
+}
+
+void Sponza()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto gray_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+
+	std::clog << "Loading OBJ model...\n";
+	auto model_mesh = ObjLoader::load("Model/sponza.obj", gray_mat);
+
+	if (model_mesh)
+	{
+		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
+		world.add(bvh_model);
+		std::clog << "Model loaded and BVH built successfully.\n";
+	}
+	else
+	{
+		std::clog << "Cannot find model!\n";
+	}
+
+	auto quad_light = std::make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 50;
+	cam.max_depth = 10;
+
+	cam.vfov = 45;
+	cam.lookfrom = Point3(0, 5, 9);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.70, 0.80, 1.00);
+
+	std::clog << "Start rendering Sponza ...\n";
+	RenderAndPreview(cam, world, lights);
+}
+
+void PBR_Test()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	// Material
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto gray_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+
+	auto metal_texture = std::make_shared<Image_Texture>("Metal048C_1K - JPG_Color.jpg");
+	auto metal_mat = std::make_shared<Lambertian>(metal_texture);
+
+	// Obj
+	std::clog << "Loading OBJ model...\n";
+	auto model_mesh = ObjLoader::load("Model/dragon.obj", metal_mat);
+
+	if (model_mesh)
+	{
+		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
+
+		world.add(std::make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
+		std::clog << "Model loaded and BVH built successfully.\n";
+	}
+	else
+	{
+		std::clog << "Cannot find model!\n";
+	}
+
+	// Light
+	auto quad_light = std::make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 50;
+	cam.max_depth = 10;
+
+	cam.vfov = 80;
 	cam.lookfrom = Point3(0, 5, 9);
 	cam.lookat = Point3(0, 0, 0);
 	cam.up = Vector3(0, 1, 0);

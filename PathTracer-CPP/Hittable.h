@@ -140,3 +140,53 @@ private :
 	double cos_theta;
 	AABB bbox;
 };
+
+class Scale : public Hittable
+{
+public:
+	Scale(std::shared_ptr<Hittable> obj, const Vector3& s): object(std::move(obj)), scale(s)
+	{
+		init();
+	}
+
+	Scale(std::shared_ptr<Hittable> obj, double s)
+		: object(std::move(obj)), scale(Vector3(s, s, s))
+	{
+		init();
+	}
+
+	void init()
+	{
+		auto bbox_min = object->bounding_box().min() * scale;
+		auto bbox_max = object->bounding_box().max() * scale;
+
+		for (int i = 0; i < 3; i++) {
+			if (bbox_min[i] > bbox_max[i]) std::swap(bbox_min[i], bbox_max[i]);
+		}
+		bbox = AABB(bbox_min, bbox_max);
+		inv_scale = Vector3(1.0 / scale.x(), 1.0 / scale.y(), 1.0 / scale.z());
+	}
+
+	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
+	{
+		Ray scaled_ray(ray.origin() * inv_scale, ray.direction() * inv_scale, ray.time());
+
+		if (!object->Hit(scaled_ray, ray_t, rec))
+			return false;
+
+		rec.p *= scale;
+
+		rec.n *= inv_scale;
+		rec.n = normalize(rec.n);
+
+		return true;
+	}
+
+	AABB bounding_box() const override { return bbox; }
+
+private:
+	std::shared_ptr<Hittable> object;
+	Vector3 scale;
+	Vector3 inv_scale;
+	AABB bbox;
+};

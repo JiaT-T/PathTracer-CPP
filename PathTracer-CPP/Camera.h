@@ -3,6 +3,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <execution>
+
 #include "Hittable.h"
 #include "My_Common.h"
 #include "Material.h"
