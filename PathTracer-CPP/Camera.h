@@ -362,32 +362,33 @@ private :
 	// Ver.1
 	Color ray_color(const Ray& ray, const int depth, const Hittable& world)
 	{
-		// If reach the max depth, return black
-		// And end the recursion
 		if (depth <= 0)
 			return Color(0, 0, 0);
 
 		HitRecord rec;
+		if (!world.Hit(ray, Interval(0.001, infinity), rec))
+			return background;
 
-		Interval ray_t(0.001, infinity);
-		if (!world.Hit(ray, ray_t, rec)) return background;
-
-		Ray scattered;
-		Color attenuation;
-		double pdf_value;
-		Scattered_Record s_rec;
+		Scattered_Record s_rec{};
 		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
 
 		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
-		Cosine_PDF surface_pdf(rec.n);
-		scattered = Ray(rec.p, surface_pdf.generate(), ray.time());
-		pdf_value = surface_pdf.value(scattered.direction());
+		if (s_rec.skip_pdf)
+		{
+			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world);
+		}
 
-		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
+		Ray scattered(rec.p, s_rec.p_pdf->generate(), ray.time());
+		const double pdf_value = s_rec.p_pdf->value(scattered.direction());
+		if (pdf_value <= 0.0)
+			return emitted_color;
 
-		Color scattered_color = (attenuation * ray_color(scattered, depth - 1, world) * scattering_pdf) / pdf_value;
+		const Color f = rec.mat->Eval(ray, rec, scattered);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const Color sample_color = ray_color(scattered, depth - 1, world);
+		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / pdf_value;
 
 		return emitted_color + scattered_color;
 	}
@@ -395,52 +396,52 @@ private :
 	// Ver.2
 	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights)
 	{
-		// If reach the max depth, return black
-		// And end the recursion
 		if (depth <= 0)
 			return Color(0, 0, 0);
 
 		HitRecord rec;
+		if (!world.Hit(ray, Interval(0.001, infinity), rec))
+			return background;
 
-		Interval ray_t(0.001, infinity);
-		if (!world.Hit(ray, ray_t, rec)) return background;
-
-		Ray scattered;
-		Color attenuation;
-		double pdf_value;
-		Scattered_Record s_rec;
+		Scattered_Record s_rec{};
 		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
 
 		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
-		// =====================
-		// Russian Roulette
-		// =====================
-		// The first three samlps are the main force of whole randering
-		// So we will use RR before these three samples
-		double p_survival = 1.0;
-		int bounce = max_depth - depth;
-		if (bounce < 3)
-		{
-			p_survival = p_survival = std::fmax(s_rec.attenuation.x(), std::fmax(s_rec.attenuation.y(), s_rec.attenuation.z()));
-			p_survival = std::clamp(p_survival, 0.0001, 0.9999);
-			if (p_survival < random_double()) return emitted_color;
-		}
-
 		if (s_rec.skip_pdf)
-			return s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights);
+		{
+			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights);
+		}
 
 		auto p_light = std::make_shared<Hittable_PDF>(lights, rec.p);
 		Mixture_PDF mixture_pdf(p_light, s_rec.p_pdf);
 
-		scattered = Ray(rec.p, mixture_pdf.generate(), ray.time());
-		pdf_value = mixture_pdf.value(scattered.direction());
+		Ray scattered(rec.p, mixture_pdf.generate(), ray.time());
+		const double pdf_value = mixture_pdf.value(scattered.direction());
+		if (pdf_value <= 0.0)
+			return emitted_color;
 
-		double scattering_pdf = rec.mat->Scattering_PDF(ray, rec, scattered);
+		const Color f = rec.mat->Eval(ray, rec, scattered);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		if (cos_theta <= 0.0)
+			return emitted_color;
 
-		Color sample_color = ray_color(scattered, depth - 1, world, lights);
-		Color scattered_color = (s_rec.attenuation * sample_color * scattering_pdf) / (pdf_value * p_survival);
+		double p_survival = 1.0;
+		const int bounce = max_depth - depth;
+		if (bounce >= 3)
+		{
+			const Color rr_weight = s_rec.attenuation * f * cos_theta / pdf_value;
+			p_survival = std::clamp(
+				std::fmax(rr_weight.x(), std::fmax(rr_weight.y(), rr_weight.z())),
+				0.0001,
+				0.9999);
+			if (random_double() > p_survival)
+				return emitted_color;
+		}
+
+		const Color sample_color = ray_color(scattered, depth - 1, world, lights);
+		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / (pdf_value * p_survival);
 
 		return emitted_color + scattered_color;
 	}

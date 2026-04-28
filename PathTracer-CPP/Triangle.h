@@ -3,12 +3,29 @@
 #include "Hittable.h"
 #include "Vector3.h"
 
+struct TexCoord2
+{
+	double x = 0.0;
+	double y = 0.0;
+
+	TexCoord2() = default;
+	TexCoord2(double x, double y) : x(x), y(y) {}
+};
+
 class Triangle : public Hittable
 {
 public :
 	// Flat Shading
 	Triangle(const Point3& v0, const Point3& v1, const Point3& v2, std::shared_ptr<Material> mat) : 
-		v0(v0), v1(v1), v2(v2), mat(mat), has_vertex_normal(false)
+		Triangle(v0, v1, v2, TexCoord2(), TexCoord2(), TexCoord2(), std::move(mat))
+	{
+	}
+
+	// Flat Shading with UV
+	Triangle(const Point3& v0, const Point3& v1, const Point3& v2,
+			 const TexCoord2& t0, const TexCoord2& t1, const TexCoord2& t2,
+			 std::shared_ptr<Material> mat) :
+		v0(v0), v1(v1), v2(v2), uv0(t0), uv1(t1), uv2(t2), mat(std::move(mat)), has_vertex_normal(false)
 	{
 		auto edge1 = v1 - v0;
 		auto edge2 = v2 - v0;
@@ -20,11 +37,22 @@ public :
 		set_bounding_box();
 	}
 
+	// Smooth Shading without UV
+	Triangle(const Point3& v0, const Point3& v1, const Point3& v2,
+			 const Vector3& n0, const Vector3& n1, const Vector3& n2,
+			 std::shared_ptr<Material> mat) :
+		Triangle(v0, v1, v2, n0, n1, n2,
+				 TexCoord2(), TexCoord2(), TexCoord2(),
+				 std::move(mat))
+	{
+	}
+
 	// Smooth Shading
 	Triangle(const Point3& v0, const Point3& v1, const Point3& v2, 
 			 const Vector3& n0, const Vector3& n1, const Vector3& n2, 
+			 const TexCoord2& t0, const TexCoord2& t1, const TexCoord2& t2,
 			 std::shared_ptr<Material> mat) :
-			 v0(v0), v1(v1), v2(v2), n0(n0), n1(n1), n2(n2),
+			 v0(v0), v1(v1), v2(v2), n0(n0), n1(n1), n2(n2), uv0(t0), uv1(t1), uv2(t2),
 			 mat(std::move(mat)), has_vertex_normal(true)
 	{
 		auto edge1 = v1 - v0;
@@ -84,6 +112,7 @@ private :
 	Point3 v0, v1, v2;
 	Vector3 face_normal;
 	Vector3 n0, n1, n2;
+	TexCoord2 uv0, uv1, uv2;
 	bool has_vertex_normal;
 	std::shared_ptr<Material> mat;
 	AABB bbox;
@@ -138,9 +167,12 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	else
 		rec.p -= face_normal * 0.001;
 
+	// Texture coordinates interpolation
+	double w = 1.0 - u - v;
+	rec.u = w * uv0.x + u * uv1.x + v * uv2.x;
+	rec.v = w * uv0.y + u * uv1.y + v * uv2.y;
+
 	rec.mat = mat;
-	rec.u = u;
-	rec.v = v;
 	rec.set_face_front(ray, shading_normal);
 
 	return true;

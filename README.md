@@ -1,104 +1,41 @@
 # PathTracer-CPP
 
-一个使用 C++20 编写的路径追踪学习项目，整体实现参考了 [Ray Tracing](https://github.com/RayTracing/raytracing.github.io) 系列教程，并在此基础上继续扩展了三角形网格、OBJ 加载、PDF 重要性采样、体积介质和实时预览窗口等功能。
+一个使用 C++20 编写的路径追踪学习项目，整体实现参考了 [Ray Tracing](https://github.com/RayTracing/raytracing.github.io) 系列教程，并在此基础上继续扩展了三角形网格、OBJ 加载、重要性采样、体积介质和实时预览窗口等功能。
 
 仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
 
-## 渲染效果
+## 当前进展
 
-### Cornell Box
+### 已实现
 
-![Cornell Box](docs/images/cornell-box.png)
+- 几何体：`Sphere`、`Triangle`、`Quad`、`Box`
+- 空间结构：`AABB`、`BVH`
+- 变换：`Translation`、`Rotate_Y`、`Scale`
+- 材质：`Lambertian`、`Metal`、`Dielectric`、`Diffuse_Light`、`isotropic`
+- 纹理：`Solid_Color`、`Checker_Texture`、`Image_Texture`、`Noise_Texture`
+- 采样：`Cosine_PDF`、`Hittable_PDF`、`Mixture_PDF`
+- 其他：运动模糊、景深、Gamma 校正、体积介质、PPM 实时预览
 
-### Bouncing Spheres
+### PBR 阶段性结果
 
-![Bouncing Spheres](docs/images/bouncing-spheres.png)
+- 新增 `PBR_Material`
+- 材质接口拆分为 `Scatter + Eval + PDF`
+- 积分式改为 `Le + f * Li * cos / pdf`
+- 新增 `GGX_PDF`，降低光滑金属高光的 fireflies
+- OBJ 现在支持读取 UV，并能按面分配 MTL 漫反射材质
+- 新增 PBR 校验场景：四个球分别对比 `roughness` 和 `metallic`
 
-## 更新记录
+### 当前限制
 
-### 2026-04-24
-
-- 新增 `PPMPreviewWindow`，支持渲染时实时窗口预览
-- 预览窗口顶部显示渲染时间与分辨率
-- 支持鼠标滚轮缩放、左键拖拽平移、右键双击重置视图
-- 优化预览刷新逻辑，减少闪白和亮度跳变
-- 修复三角形命中时法线处理问题，统一使用安全的 `shading_normal`
-- 修复 `Triangle_Test()` 中发光三角形未加入 `world` 的问题
-- 新增 `Teapot` 场景入口，并保留 `ObjTest` 网格测试场景
-
-### 2026-04-17
-
-- 合入路径追踪主线更新
-- 完成基于 PDF 的重要性采样与直接光照采样框架
-- 增加 `Mixture_PDF`、`Hittable_PDF`、余弦加权采样和面光源采样相关支持
-
-### 2026-04-13
-
-- 整理 README
-- 明确项目结构、构建方式和场景入口说明
-
-## 已实现功能
-
-### 1. 几何体与空间结构
-
-- 球体与运动球体 `Sphere`
-- 三角形 `Triangle`
-- 四边形 `Quad`
-- 由六个四边形构成的 `Box`
-- 包围盒 `AABB`
-- BVH 加速结构 `BVH`
-- 平移实例 `Translation`
-- 绕 Y 轴旋转实例 `Rotate_Y`
-- 恒定体积介质 `Constant_Medium`
-- OBJ 网格加载 `ObjLoader`
-
-### 2. 材质系统
-
-- 漫反射 `Lambertian`
-- 金属 `Metal`
-- 介质 / 玻璃 `Dielectric`
-- 发光材质 `Diffuse_Light`
-- 各向同性介质材质 `isotropic`
-
-### 3. 纹理系统
-
-- 纯色纹理 `Solid_Color`
-- 棋盘纹理 `Checker_Texture`
-- 图像纹理 `Image_Texture`
-- Perlin Noise 纹理
-- 基于 Turbulence 的大理石纹理
-
-### 4. 相机与渲染能力
-
-- PPM 图像输出
-- 渲染完成后自动打开窗口预览
-- 渲染过程中实时刷新预览
-- 顶部信息栏显示渲染时间和分辨率
-- 预览窗口缩放 / 拖拽 / 视图重置
-- 多重采样抗锯齿
-- 分层采样 `Stratified Sampling`
-- Gamma 校正
-- 景深
-- 运动模糊
-- 背景颜色控制
-- 直接光照采样
-- 基于 PDF 的重要性采样
-- 混合 PDF `Mixture_PDF`
-
-### 5. 采样与数学基础
-
-- ONB 正交基变换
-- 球面 UV 映射
-- 余弦加权半球采样
-- 面光源采样
-- 球体立体角采样
-- Hittable PDF
-- Monte Carlo 积分与 PDF 分离式结构
+- `PBR_Material` 仍是最小可用版本
+- 目前只覆盖 `baseColor / roughness / metallic`
+- `normal map`、IBL、VNDF 采样、完整纹理工作流还没有接入
 
 ## 场景入口
 
-主入口位于 [PathTracer-CPP/Renderer.cpp](PathTracer-CPP/Renderer.cpp)。
-当前通过 `main()` 中的 `switch` 选择场景：
+主入口位于 [Renderer.cpp](PathTracer-CPP/Renderer.cpp)。
+
+当前通过 `main()` 里的 `switch` 选择场景：
 
 - `1`: Bouncing Spheres
 - `2`: Checker Spheres
@@ -112,42 +49,46 @@
 - `10`: Triangle Test
 - `11`: ObjTest
 - `12`: Teapot
+- `13`: Sponza
+- `14`: PBR Test
+
+## PBR Test 说明
+
+`PBR_Test()` 目前使用一个最小验证场景：
+
+- 一块中性地面
+- 一个顶部面积光源
+- 四个球共享相同 `baseColor`
+- 左两球为非金属，右两球为金属
+- 外侧球较光滑，内侧球较粗糙
+
+这个场景的目的不是做最终效果图，而是快速检查：
+
+- 金属与非金属的响应是否分离
+- 粗糙度是否影响高光扩散
+- 采样策略是否引入明显亮点噪声
 
 ## 项目结构
 
 ```text
 PathTracer/
-├─ docs/
-│  └─ images/
-│     ├─ bouncing-spheres.png
-│     └─ cornell-box.png
-├─ README.md
-└─ PathTracer-CPP/
-   ├─ Renderer.cpp
-   ├─ Camera.h
-   ├─ PPMPreviewWindow.h
-   ├─ Hittable.h
-   ├─ Hittable_List.h
-   ├─ Sphere.h
-   ├─ Triangle.h
-   ├─ Quad.h
-   ├─ Constant_Medium.h
-   ├─ Material.h
-   ├─ Texture.h
-   ├─ PDF.h
-   ├─ AABB.h
-   ├─ BVH.h
-   ├─ ONB.h
-   ├─ Vector3.h
-   ├─ Ray.h
-   ├─ Color.h
-   ├─ My_Common.h
-   ├─ Timer.h
-   ├─ ObjLoader.h
-   ├─ external/
-   ├─ images/
-   ├─ Model/
-   └─ PathTracer-CPP.vcxproj
+├── docs/
+│   └── images/
+├── README.md
+└── PathTracer-CPP/
+    ├── Renderer.cpp
+    ├── Camera.h
+    ├── Material.h
+    ├── Texture.h
+    ├── ObjLoader.h
+    ├── Triangle.h
+    ├── PDF.h
+    ├── Hittable.h
+    ├── BVH.h
+    ├── PPMPreviewWindow.h
+    ├── images/
+    ├── Model/
+    └── PathTracer-CPP.vcxproj
 ```
 
 ## 构建与运行
@@ -156,10 +97,10 @@ PathTracer/
 
 - Windows
 - Visual Studio 2022
-- MSVC 工具链
+- MSVC
 - C++20
 
-### 推荐构建方式
+### 构建方式
 
 当前仓库提供可直接打开的 Visual Studio 工程：
 
@@ -169,28 +110,30 @@ PathTracer/
 建议步骤：
 
 1. 使用 Visual Studio 打开 `PathTracer-CPP.slnx` 或 `PathTracer-CPP.vcxproj`
-2. 选择 `x64` 平台
-3. 使用 `Release` 配置进行正式渲染，`Debug` 配置更适合调试
+2. 选择 `x64`
+3. `Release` 用于正式渲染，`Debug` 用于调试
 4. 运行项目
 
-### 运行输出
+### 输出说明
 
 - 渲染结果默认写入 `PathTracer-CPP/image.ppm`
-- 控制台会输出剩余扫描线和总渲染时间
-- 程序会自动弹出实时预览窗口
-- 预览窗口顶部显示渲染时间和分辨率
+- 控制台输出剩余扫描线与总渲染时间
+- 程序会弹出实时预览窗口
 
-### 图像纹理说明
+## 纹理与资源
 
-项目中的图像纹理通过 `rtw_stb_image.h` 加载，通常可通过以下方式找到纹理文件：
+图像纹理通过 `rtw_stb_image.h` 加载，通常可从以下位置找到：
 
 - 当前工作目录
-- `images/` 目录
-- 环境变量 `RTW_IMAGES` 指定的纹理目录
+- `PathTracer-CPP/images/`
+- 环境变量 `RTW_IMAGES` 指定的目录
 
-## 当前待办
+OBJ 加载会优先在模型所在目录内查找对应的 `.mtl` 与贴图文件。
 
-- 引入 CPU 多线程渲染
-- 为预览窗口增加暂停、保存快照或状态栏信息
-- 继续扩展更完整的 MIS / 多光源采样策略
-- 增加更多网格场景与材质测试案例
+## 后续计划
+
+- 完成基于 GGX 的更稳定 BSDF 采样
+- 接入 `roughness / metallic / normal` 贴图工作流
+- 增加 IBL 与环境贴图支持
+- 继续完善多光源与 MIS 策略
+- 增加更多针对材质系统的测试场景

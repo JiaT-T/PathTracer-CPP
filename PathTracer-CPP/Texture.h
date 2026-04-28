@@ -56,6 +56,7 @@ class Image_Texture : public Texture
 {
 public :
 	Image_Texture(const char* filename) : image(filename) {}
+	Image_Texture(const std::string& filename) : image(filename.c_str()) {}
 	Color value(double u, double v, const Point3& p) const override
 	{
 		// If there is no image data, return magenta as a debugging aid.

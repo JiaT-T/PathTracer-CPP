@@ -50,7 +50,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (7)
+	switch (14)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -670,49 +670,64 @@ void PBR_Test()
 	Hittable_List world;
 	Hittable_List lights;
 
-	// Material
-	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
-	auto gray_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
+	auto ground_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
 
-	auto metal_texture = std::make_shared<Image_Texture>("Metal048C_1K - JPG_Color.jpg");
-	auto metal_mat = std::make_shared<Lambertian>(metal_texture);
+	world.add(std::make_shared<Quad>(
+		Point3(-8.0, -1.0, -8.0),
+		Vector3(16.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 16.0),
+		ground_mat));
 
-	// Obj
-	std::clog << "Loading OBJ model...\n";
-	auto model_mesh = ObjLoader::load("Model/dragon.obj", metal_mat);
-
-	if (model_mesh)
+	auto make_pbr = [](const Color& base_color, double roughness, double metallic)
 	{
-		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
+		return std::make_shared<PBR_Material>(
+			std::make_shared<Solid_Color>(base_color),
+			nullptr,
+			std::make_shared<Solid_Color>(roughness, roughness, roughness),
+			std::make_shared<Solid_Color>(metallic, metallic, metallic));
+	};
 
-		world.add(std::make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
-		std::clog << "Model loaded and BVH built successfully.\n";
-	}
-	else
-	{
-		std::clog << "Cannot find model!\n";
-	}
+	world.add(std::make_shared<Sphere>(
+		Point3(-3.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.08, 0.0)));
+	world.add(std::make_shared<Sphere>(
+		Point3(-1.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.75, 0.0)));
+	world.add(std::make_shared<Sphere>(
+		Point3(1.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.08, 1.0)));
+	world.add(std::make_shared<Sphere>(
+		Point3(3.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.75, 1.0)));
 
-	// Light
-	auto quad_light = std::make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light_mat);
+	auto quad_light = std::make_shared<Quad>(
+		Point3(-2.0, 5.5, 2.0),
+		Vector3(4.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, -4.0),
+		light_mat);
 	world.add(quad_light);
 	lights.add(quad_light);
 
 	world = Hittable_List(std::make_shared<BVH_Node>(world));
 
 	Camera cam;
-	cam.aspect_ratio = 1.0;
-	cam.image_width = 400;
-	cam.sample_per_pixel = 50;
-	cam.max_depth = 10;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 800;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 20;
 
-	cam.vfov = 80;
-	cam.lookfrom = Point3(0, 5, 9);
-	cam.lookat = Point3(0, 0, 0);
+	cam.vfov = 35;
+	cam.lookfrom = Point3(0, 2.2, 8.5);
+	cam.lookat = Point3(0, 0.7, 0);
 	cam.up = Vector3(0, 1, 0);
 	cam.defocus_angle = 0;
-	cam.background = Color(0.70, 0.80, 1.00);
+	cam.background = Color(0.02, 0.02, 0.02);
 
-	std::clog << "Start rendering Triangle PDF Test...\n";
+	std::clog << "Start rendering PBR validation scene...\n";
 	RenderAndPreview(cam, world, lights);
 }
