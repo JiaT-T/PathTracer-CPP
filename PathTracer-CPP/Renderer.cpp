@@ -50,7 +50,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (11)
+	switch (7)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -343,7 +343,7 @@ void Cornell_Box()
 
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 600;
-	cam.sample_per_pixel = 50;
+	cam.sample_per_pixel = 500;
 	cam.max_depth = 50;
 	cam.background = Color(0, 0, 0);
 

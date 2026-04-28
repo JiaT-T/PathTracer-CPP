@@ -1,6 +1,9 @@
 #pragma once
+#include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <execution>
@@ -39,31 +42,8 @@ public :
 	// Ver.1
 	void Render(const Hittable& world, PPMPreviewWindow* preview = nullptr)
 	{
-		initialize();
-
-		// Create an output file stream
-		std::ofstream out(output_filename);
-		if (!out.is_open())
-		{
-			std::cerr << "Error: Cannot open file.\n";
-			return;
-		}
-
-		// Renderer
-		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
-		std::vector<unsigned char> preview_pixels;
-		auto preview_start_time = std::chrono::steady_clock::now();
-		auto last_preview_update_time = preview_start_time;
-		if (preview)
-		{
-			preview_pixels.assign(static_cast<size_t>(image_width) * image_height * 4, 0);
-			preview->UpdateImage(preview_pixels, 0, 0.0);
-		}
-
-		for (int j = 0; j < image_height; j++)
-		{
-			std::clog << "\rScanlines remaining: " << (image_height - j) << ' ' << std::flush;
-			for (int i = 0; i < image_width; i++)
+		render_impl(
+			[&](int i, int j)
 			{
 				Color pixel_color(0, 0, 0);
 				for (int s_j = 0; s_j < sqrt_spp; s_j++)
@@ -74,43 +54,44 @@ public :
 						pixel_color += ray_color(r, max_depth, world);
 					}
 				}
-				Color final_color = pixel_color * pixel_sample_scale;
-				write_color(out, final_color);
-
-				if (preview)
-				{
-					Color_Bytes bytes = to_color_bytes(final_color);
-					size_t pixel_index = static_cast<size_t>(j * image_width + i) * 4;
-					preview_pixels[pixel_index + 0] = bytes.b;
-					preview_pixels[pixel_index + 1] = bytes.g;
-					preview_pixels[pixel_index + 2] = bytes.r;
-					preview_pixels[pixel_index + 3] = 255;
-
-					auto now = std::chrono::steady_clock::now();
-					if (!preview->IsClosed() &&
-						(i == image_width - 1 ||
-						 std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033))
-					{
-						std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-						preview->UpdateImage(preview_pixels, j, elapsed_seconds.count());
-						last_preview_update_time = now;
-					}
-				}
-			}
-
-			if (preview && !preview->IsClosed())
-			{
-				auto now = std::chrono::steady_clock::now();
-				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-				preview->UpdateImage(preview_pixels, j + 1, elapsed_seconds.count());
-				last_preview_update_time = now;
-			}
-		}
-		std::clog << "\rDone.                 \n";
+				return pixel_color * pixel_sample_scale;
+			},
+			preview);
 	}
 
 	// Ver.2
 	void Render(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
+	{
+		render_impl(
+			[&](int i, int j)
+			{
+				Color pixel_color(0, 0, 0);
+				for (int s_j = 0; s_j < sqrt_spp; s_j++)
+				{
+					for (int s_i = 0; s_i < sqrt_spp; s_i++)
+					{
+						Ray r = get_ray(i, j, s_i, s_j);
+						pixel_color += ray_color(r, max_depth, world, lights);
+					}
+				}
+				return pixel_color * pixel_sample_scale;
+			},
+			preview);
+	}
+
+private :
+	struct RenderTile
+	{
+		int x_begin = 0;
+		int x_end = 0;
+		int y_begin = 0;
+		int y_end = 0;
+	};
+
+	static constexpr int kTileSize = 16;
+
+	template <typename PixelShader>
+	void render_impl(PixelShader&& pixel_shader, PPMPreviewWindow* preview)
 	{
 		initialize();
 
@@ -124,65 +105,169 @@ public :
 
 		// Renderer
 		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+		std::vector<Color> framebuffer(static_cast<size_t>(image_width) * image_height);
 		std::vector<unsigned char> preview_pixels;
 		auto preview_start_time = std::chrono::steady_clock::now();
 		auto last_preview_update_time = preview_start_time;
+		std::mutex progress_mutex;
+		std::atomic<int> completed_rows{ 0 };
+		std::atomic<int> completed_tiles{ 0 };
+		std::vector<std::atomic<int>> row_progress(static_cast<size_t>(image_height));
+		for (auto& row_counter : row_progress)
+			row_counter.store(0, std::memory_order_relaxed);
+		const std::vector<RenderTile> tiles = build_tiles();
+		const int total_tiles = static_cast<int>(tiles.size());
 		if (preview)
 		{
 			preview_pixels.assign(static_cast<size_t>(image_width) * image_height * 4, 0);
 			preview->UpdateImage(preview_pixels, 0, 0.0);
 		}
 
-		for (int j = 0; j < image_height; j++)
-		{
-			std::clog << "\rScanlines remaining: " << (image_height - j) << ' ' << std::flush;
-			for (int i = 0; i < image_width; i++)
+		std::for_each(std::execution::par, tiles.begin(), tiles.end(),
+			[&](const RenderTile& tile)
 			{
-				Color pixel_color(0, 0, 0);
-				for (int s_j = 0; s_j < sqrt_spp; s_j++)
-				{
-					for (int s_i = 0; s_i < sqrt_spp; s_i++)
-					{
-						Ray r = get_ray(i, j, s_i, s_j);
-						pixel_color += ray_color(r, max_depth, world, lights);
-					}
-				}
-				Color final_color = pixel_color * pixel_sample_scale;
-				write_color(out, final_color);
-
+				std::vector<Color_Bytes> tile_preview_bytes;
 				if (preview)
 				{
-					Color_Bytes bytes = to_color_bytes(final_color);
-					size_t pixel_index = static_cast<size_t>(j * image_width + i) * 4;
-					preview_pixels[pixel_index + 0] = bytes.b;
-					preview_pixels[pixel_index + 1] = bytes.g;
-					preview_pixels[pixel_index + 2] = bytes.r;
-					preview_pixels[pixel_index + 3] = 255;
+					tile_preview_bytes.resize(static_cast<size_t>(tile_width(tile) * tile_height(tile)));
+				}
 
-					auto now = std::chrono::steady_clock::now();
-					if (!preview->IsClosed() &&
-						(i == image_width - 1 ||
-						 std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033))
+				for (int j = tile.y_begin; j < tile.y_end; j++)
+				{
+					for (int i = tile.x_begin; i < tile.x_end; i++)
 					{
-						std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-						preview->UpdateImage(preview_pixels, j, elapsed_seconds.count());
-						last_preview_update_time = now;
+						Color final_color = pixel_shader(i, j);
+						size_t framebuffer_index = static_cast<size_t>(j) * image_width + i;
+						framebuffer[framebuffer_index] = final_color;
+
+						if (preview)
+						{
+							size_t local_x = static_cast<size_t>(i - tile.x_begin);
+							size_t local_y = static_cast<size_t>(j - tile.y_begin);
+							size_t local_index = local_y * tile_width(tile) + local_x;
+							tile_preview_bytes[local_index] = to_color_bytes(final_color);
+						}
 					}
 				}
-			}
 
-			if (preview && !preview->IsClosed())
-			{
 				auto now = std::chrono::steady_clock::now();
+				const int tile_completed_rows = update_completed_rows(tile, row_progress, completed_rows);
+				const int finished_tiles = completed_tiles.fetch_add(1, std::memory_order_relaxed) + 1;
+				const bool is_last_tile = finished_tiles == total_tiles;
+
+				std::lock_guard<std::mutex> lock(progress_mutex);
+				if (preview)
+				{
+					blit_tile_preview(tile, tile_preview_bytes, preview_pixels);
+				}
+
+				if (is_last_tile ||
+					std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033)
+				{
+					std::clog << "\rScanlines remaining: " << (image_height - tile_completed_rows) << ' ' << std::flush;
+
+					if (preview && !preview->IsClosed())
+					{
+						std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+						preview->UpdateImage(preview_pixels, tile_completed_rows, elapsed_seconds.count());
+					}
+
+					last_preview_update_time = now;
+				}
+			});
+
+		for (int j = 0; j < image_height; j++)
+		{
+			for (int i = 0; i < image_width; i++)
+			{
+				write_color(out, framebuffer[static_cast<size_t>(j) * image_width + i]);
+			}
+		}
+
+		if (preview && !preview->IsClosed())
+		{
+			auto now = std::chrono::steady_clock::now();
+			if (std::chrono::duration<double>(now - last_preview_update_time).count() > 0.0)
+			{
 				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-				preview->UpdateImage(preview_pixels, j + 1, elapsed_seconds.count());
-				last_preview_update_time = now;
+				preview->UpdateImage(preview_pixels, image_height, elapsed_seconds.count());
 			}
 		}
 		std::clog << "\rDone.                 \n";
 	}
 
-private :
+	std::vector<RenderTile> build_tiles() const
+	{
+		std::vector<RenderTile> tiles;
+		tiles.reserve(((image_width + kTileSize - 1) / kTileSize) * ((image_height + kTileSize - 1) / kTileSize));
+
+		for (int y = 0; y < image_height; y += kTileSize)
+		{
+			for (int x = 0; x < image_width; x += kTileSize)
+			{
+				tiles.push_back(RenderTile{
+					x,
+					std::min(x + kTileSize, image_width),
+					y,
+					std::min(y + kTileSize, image_height)
+				});
+			}
+		}
+
+		return tiles;
+	}
+
+	static int tile_width(const RenderTile& tile)
+	{
+		return tile.x_end - tile.x_begin;
+	}
+
+	static int tile_height(const RenderTile& tile)
+	{
+		return tile.y_end - tile.y_begin;
+	}
+
+	void blit_tile_preview(
+		const RenderTile& tile,
+		const std::vector<Color_Bytes>& tile_preview_bytes,
+		std::vector<unsigned char>& preview_pixels)
+	{
+		const size_t local_width = static_cast<size_t>(tile_width(tile));
+		for (int j = tile.y_begin; j < tile.y_end; j++)
+		{
+			for (int i = tile.x_begin; i < tile.x_end; i++)
+			{
+				size_t local_x = static_cast<size_t>(i - tile.x_begin);
+				size_t local_y = static_cast<size_t>(j - tile.y_begin);
+				size_t local_index = local_y * local_width + local_x;
+				const Color_Bytes& bytes = tile_preview_bytes[local_index];
+				size_t pixel_index = (static_cast<size_t>(j) * image_width + static_cast<size_t>(i)) * 4;
+				preview_pixels[pixel_index + 0] = bytes.b;
+				preview_pixels[pixel_index + 1] = bytes.g;
+				preview_pixels[pixel_index + 2] = bytes.r;
+				preview_pixels[pixel_index + 3] = 255;
+			}
+		}
+	}
+
+	int update_completed_rows(
+		const RenderTile& tile,
+		std::vector<std::atomic<int>>& row_progress,
+		std::atomic<int>& completed_rows)
+	{
+		const int width = tile_width(tile);
+		for (int j = tile.y_begin; j < tile.y_end; j++)
+		{
+			const int finished_pixels = row_progress[static_cast<size_t>(j)].fetch_add(width, std::memory_order_relaxed) + width;
+			if (finished_pixels == image_width)
+			{
+				completed_rows.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+
+		return completed_rows.load(std::memory_order_relaxed);
+	}
+
 	int     image_height;       // Rendered image height
 	double  pixel_sample_scale; // Color scale factor for a sum of pixel samples
 	int		sqrt_spp;           // Square root of number of samples per pixel
@@ -202,7 +287,7 @@ private :
 		// Ensure the height always greater than 1
 		image_height = (image_height < 1) ? 1 : image_height;
 
-		sqrt_spp = std::sqrt(sample_per_pixel);
+		sqrt_spp = static_cast<int>(std::sqrt(sample_per_pixel));
 		recip_sqrt_spp = 1.0 / sqrt_spp;
 		pixel_sample_scale = 1.0 / (sqrt_spp * sqrt_spp);
 
