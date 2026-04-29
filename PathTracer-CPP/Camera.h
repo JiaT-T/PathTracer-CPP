@@ -17,6 +17,12 @@
 class Camera
 {
 public : 
+	enum class Render_Mode
+	{
+		Serial,
+		Parallel
+	};
+
 	// Image
 	double aspect_ratio     = 16.0 / 9.0;
 	int    image_width      = 400;
@@ -24,6 +30,7 @@ public :
 	int    max_depth        = 10;
 	Color  background;
 	std::string output_filename = "image.ppm";
+	Render_Mode render_mode = Render_Mode::Parallel;
 
 	double  vfov     = 90;
 	Vector3 lookfrom = Point3(0, 0, 0);
@@ -123,58 +130,62 @@ private :
 			preview->UpdateImage(preview_pixels, 0, 0.0);
 		}
 
-		std::for_each(std::execution::par, tiles.begin(), tiles.end(),
-			[&](const RenderTile& tile)
+		auto render_tile = [&](const RenderTile& tile)
+		{
+			std::vector<Color_Bytes> tile_preview_bytes;
+			if (preview)
 			{
-				std::vector<Color_Bytes> tile_preview_bytes;
-				if (preview)
-				{
-					tile_preview_bytes.resize(static_cast<size_t>(tile_width(tile) * tile_height(tile)));
-				}
+				tile_preview_bytes.resize(static_cast<size_t>(tile_width(tile) * tile_height(tile)));
+			}
 
-				for (int j = tile.y_begin; j < tile.y_end; j++)
+			for (int j = tile.y_begin; j < tile.y_end; j++)
+			{
+				for (int i = tile.x_begin; i < tile.x_end; i++)
 				{
-					for (int i = tile.x_begin; i < tile.x_end; i++)
+					Color final_color = pixel_shader(i, j);
+					size_t framebuffer_index = static_cast<size_t>(j) * image_width + i;
+					framebuffer[framebuffer_index] = final_color;
+
+					if (preview)
 					{
-						Color final_color = pixel_shader(i, j);
-						size_t framebuffer_index = static_cast<size_t>(j) * image_width + i;
-						framebuffer[framebuffer_index] = final_color;
-
-						if (preview)
-						{
-							size_t local_x = static_cast<size_t>(i - tile.x_begin);
-							size_t local_y = static_cast<size_t>(j - tile.y_begin);
-							size_t local_index = local_y * tile_width(tile) + local_x;
-							tile_preview_bytes[local_index] = to_color_bytes(final_color);
-						}
+						size_t local_x = static_cast<size_t>(i - tile.x_begin);
+						size_t local_y = static_cast<size_t>(j - tile.y_begin);
+						size_t local_index = local_y * tile_width(tile) + local_x;
+						tile_preview_bytes[local_index] = to_color_bytes(final_color);
 					}
 				}
+			}
 
-				auto now = std::chrono::steady_clock::now();
-				const int tile_completed_rows = update_completed_rows(tile, row_progress, completed_rows);
-				const int finished_tiles = completed_tiles.fetch_add(1, std::memory_order_relaxed) + 1;
-				const bool is_last_tile = finished_tiles == total_tiles;
+			auto now = std::chrono::steady_clock::now();
+			const int tile_completed_rows = update_completed_rows(tile, row_progress, completed_rows);
+			const int finished_tiles = completed_tiles.fetch_add(1, std::memory_order_relaxed) + 1;
+			const bool is_last_tile = finished_tiles == total_tiles;
 
-				std::lock_guard<std::mutex> lock(progress_mutex);
-				if (preview)
+			std::lock_guard<std::mutex> lock(progress_mutex);
+			if (preview)
+			{
+				blit_tile_preview(tile, tile_preview_bytes, preview_pixels);
+			}
+
+			if (is_last_tile ||
+				std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033)
+			{
+				std::clog << "\rScanlines remaining: " << (image_height - tile_completed_rows) << ' ' << std::flush;
+
+				if (preview && !preview->IsClosed())
 				{
-					blit_tile_preview(tile, tile_preview_bytes, preview_pixels);
+					std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+					preview->UpdateImage(preview_pixels, tile_completed_rows, elapsed_seconds.count());
 				}
 
-				if (is_last_tile ||
-					std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033)
-				{
-					std::clog << "\rScanlines remaining: " << (image_height - tile_completed_rows) << ' ' << std::flush;
+				last_preview_update_time = now;
+			}
+		};
 
-					if (preview && !preview->IsClosed())
-					{
-						std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-						preview->UpdateImage(preview_pixels, tile_completed_rows, elapsed_seconds.count());
-					}
-
-					last_preview_update_time = now;
-				}
-			});
+		if (render_mode == Render_Mode::Parallel)
+			std::for_each(std::execution::par, tiles.begin(), tiles.end(), render_tile);
+		else
+			std::for_each(tiles.begin(), tiles.end(), render_tile);
 
 		for (int j = 0; j < image_height; j++)
 		{
