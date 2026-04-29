@@ -29,6 +29,7 @@ void Teapot();
 void Sponza();
 void PBR_Test();
 void PBR_Benchmark();
+void PBR_Normal_Map_Test();
 
 void RenderAndPreview(Camera& cam, const Hittable& world)
 {
@@ -51,7 +52,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (15)
+	switch (16)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -68,6 +69,7 @@ int main()
 		case 13:  Sponza();                                 break;
 		case 14:  PBR_Test();                               break;
 		case 15:  PBR_Benchmark();                          break;
+		case 16:  PBR_Normal_Map_Test();                    break;
 	}
 }
 
@@ -783,4 +785,100 @@ void PBR_Benchmark()
 	std::clog << "[Benchmark] Parallel: " << parallel_seconds << " s\n";
 	std::clog << "[Benchmark] Speedup:  " << speedup << "x\n";
 	std::clog << "[Benchmark] Time reduced: " << reduction << "%\n";
+}
+
+void PBR_Normal_Map_Test()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(120, 120, 120));
+	auto fill_light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
+	auto ground_mat = std::make_shared<Lambertian>(Color(0.65, 0.65, 0.65));
+
+	auto base_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Color.jpg");
+	auto roughness_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Roughness.jpg");
+	auto metallic_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Metalness.jpg");
+	auto normal_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_NormalGL.jpg");
+
+	auto pbr_with_normal = std::make_shared<PBR_Material>(base_tex, normal_tex, roughness_tex, metallic_tex);
+	auto pbr_without_normal = std::make_shared<PBR_Material>(base_tex, nullptr, roughness_tex, metallic_tex);
+
+	world.add(std::make_shared<Quad>(
+		Point3(-8.0, -1.0, -8.0),
+		Vector3(16.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 16.0),
+		ground_mat));
+
+	auto add_panel = [&](const Point3& origin, std::shared_ptr<Material> mat)
+	{
+		const Point3 p0 = origin;
+		const Point3 p1 = origin + Vector3(2.4, 0.0, 0.0);
+		const Point3 p2 = origin + Vector3(2.4, 2.4, 0.0);
+		const Point3 p3 = origin + Vector3(0.0, 2.4, 0.0);
+
+		world.add(std::make_shared<Triangle>(
+			p0, p1, p2,
+			TexCoord2(0.0, 0.0), TexCoord2(1.0, 0.0), TexCoord2(1.0, 1.0),
+			mat));
+		world.add(std::make_shared<Triangle>(
+			p0, p2, p3,
+			TexCoord2(0.0, 0.0), TexCoord2(1.0, 1.0), TexCoord2(0.0, 1.0),
+			mat));
+	};
+
+	add_panel(Point3(-3.2, -0.2, 0.0), pbr_with_normal);
+	add_panel(Point3(0.8, -0.2, 0.0), pbr_without_normal);
+
+	world.add(std::make_shared<Sphere>(
+		Point3(-4.8, 0.2, 1.4),
+		0.8,
+		std::make_shared<PBR_Material>(
+			std::make_shared<Solid_Color>(Color(0.95, 0.65, 0.2)),
+			nullptr,
+			std::make_shared<Solid_Color>(0.08, 0.08, 0.08),
+			std::make_shared<Solid_Color>(1.0, 1.0, 1.0))));
+
+	world.add(std::make_shared<Sphere>(
+		Point3(4.2, 0.2, 1.4),
+		0.8,
+		std::make_shared<PBR_Material>(
+			std::make_shared<Solid_Color>(Color(0.95, 0.65, 0.2)),
+			nullptr,
+			std::make_shared<Solid_Color>(0.75, 0.75, 0.75),
+			std::make_shared<Solid_Color>(0.0, 0.0, 0.0))));
+
+	auto quad_light = std::make_shared<Quad>(
+		Point3(-2.8, 4.8, 3.2),
+		Vector3(5.6, 0.0, 0.0),
+		Vector3(0.0, 0.0, -6.2),
+		light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	auto fill_light = std::make_shared<Quad>(
+		Point3(-5.4, 0.8, 3.6),
+		Vector3(0.0, 3.0, 0.0),
+		Vector3(0.0, 0.0, -4.8),
+		fill_light_mat);
+	world.add(fill_light);
+	lights.add(fill_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 960;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 20;
+	cam.vfov = 27;
+	cam.lookfrom = Point3(0.0, 1.45, 6.6);
+	cam.lookat = Point3(0.0, 1.0, 0.35);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.16, 0.16, 0.16);
+	cam.output_filename = "pbr_normal_map_test.ppm";
+
+	std::clog << "Start rendering PBR normal map validation scene...\n";
+	RenderAndPreview(cam, world, lights);
 }

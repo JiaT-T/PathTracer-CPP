@@ -251,10 +251,11 @@ public :
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const double specular_weight = std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
+		const Vector3 n = sample_shading_normal(rec);
 
 		s_rec.attenuation = Color(1.0, 1.0, 1.0);
-		auto diffuse_pdf = std::make_shared<Cosine_PDF>(rec.n);
-		auto specular_pdf = std::make_shared<GGX_PDF>(rec.n, normalize(-ray_in.direction()), roughness);
+		auto diffuse_pdf = std::make_shared<Cosine_PDF>(n);
+		auto specular_pdf = std::make_shared<GGX_PDF>(n, normalize(-ray_in.direction()), roughness);
 
 		if (specular_weight <= 0.0)
 			s_rec.p_pdf = diffuse_pdf;
@@ -268,7 +269,7 @@ public :
 
 	Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
 	{
-		const Vector3 n = rec.n;
+		const Vector3 n = sample_shading_normal(rec);
 		const Vector3 v = normalize(-ray_in.direction());
 		const Vector3 l = normalize(scattered.direction());
 		const double n_dot_l = std::max(dot(n, l), 0.0);
@@ -294,8 +295,9 @@ public :
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const double specular_weight = std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
-		const Cosine_PDF diffuse_pdf(rec.n);
-		const GGX_PDF specular_pdf(rec.n, normalize(-ray_in.direction()), roughness);
+		const Vector3 n = sample_shading_normal(rec);
+		const Cosine_PDF diffuse_pdf(n);
+		const GGX_PDF specular_pdf(n, normalize(-ray_in.direction()), roughness);
 
 		if (specular_weight <= 0.0)
 			return diffuse_pdf.value(scattered.direction());
@@ -382,6 +384,44 @@ private:
 	{
 		double denom = n_dot_v * (1.0 - k) + k;
 		return n_dot_v / denom;
+	}
+
+	// Returns the World Space normal vector
+	Vector3 sample_shading_normal(const HitRecord& rec) const
+	{
+		if (!normal_tex || !rec.has_tangent_space)
+			return rec.n;
+		
+		Color normal_color = normal_tex->value(rec.u, rec.v, rec.p);
+		// Normal in tangent space, remap from [0, 1] to [-1, 1]
+		Vector3 n_ts(
+			2.0 * normal_color.x() - 1.0,
+			2.0 * normal_color.y() - 1.0,
+			2.0 * normal_color.z() - 1.0
+		);
+		n_ts = normalize(n_ts);
+
+		Vector3 N = rec.n;
+
+		Vector3 T = rec.tangent - dot(rec.tangent, N) * N;
+		if (T.length_squared() < 1e-10) return rec.n;
+		T = normalize(T);
+
+		Vector3 B = cross(N, T);
+		if (B.length_squared() < 1e-10) return rec.n;
+		B = normalize(B);
+
+		// Normal in world space
+		Vector3 n_ws = normalize(
+			n_ts.x() * T +
+			n_ts.y() * B +
+			n_ts.z() * N
+		);
+		// Ensure the normal is facing the same hemisphere as the geometric normal
+		if (dot(n_ws, rec.geo_n) < 0.0)
+			n_ws = -n_ws;
+
+		return n_ws;
 	}
 
 	std::shared_ptr<Texture> base_tex;

@@ -8,11 +8,15 @@ class HitRecord
 public :
 	Point3 p;
 	Vector3 n;
-	double t;
-	bool front_face;
+	Vector3 geo_n = Vector3(0, 1, 0);
+	Vector3 tangent = Vector3(1, 0, 0);
+	Vector3 bitangent = Vector3(0, 0, 1);
+	double t = 0.0;
+	bool front_face = false;
+	bool has_tangent_space = false;
 	std::shared_ptr<Material> mat;
-	double u;
-	double v;
+	double u = 0.0;
+	double v = 0.0;
 
 	// outward_normal is normalized
 	void set_face_front(const Ray& ray, const Vector3& outward_normal)
@@ -129,6 +133,24 @@ public :
 			rec.n.y(),
 			(-sin_theta * rec.n.x()) + (cos_theta * rec.n.z()));
 
+		rec.geo_n = Vector3(
+			(cos_theta * rec.geo_n.x()) + (sin_theta * rec.geo_n.z()),
+			rec.geo_n.y(),
+			(-sin_theta * rec.geo_n.x()) + (cos_theta * rec.geo_n.z()));
+
+		if (rec.has_tangent_space)
+		{
+			rec.tangent = Vector3(
+				(cos_theta * rec.tangent.x()) + (sin_theta * rec.tangent.z()),
+				rec.tangent.y(),
+				(-sin_theta * rec.tangent.x()) + (cos_theta * rec.tangent.z()));
+
+			rec.bitangent = Vector3(
+				(cos_theta * rec.bitangent.x()) + (sin_theta * rec.bitangent.z()),
+				rec.bitangent.y(),
+				(-sin_theta * rec.bitangent.x()) + (cos_theta * rec.bitangent.z()));
+		}
+
 		return true;
 	}
 
@@ -178,6 +200,16 @@ public:
 
 		rec.n *= inv_scale;
 		rec.n = normalize(rec.n);
+		rec.geo_n *= inv_scale;
+		rec.geo_n = normalize(rec.geo_n);
+
+		if (rec.has_tangent_space)
+		{
+			rec.tangent *= inv_scale;
+			rec.bitangent *= inv_scale;
+			rec.tangent = normalize(rec.tangent);
+			rec.bitangent = normalize(rec.bitangent);
+		}
 
 		return true;
 	}
