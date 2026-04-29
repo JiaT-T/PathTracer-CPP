@@ -26,8 +26,10 @@ void Chapter_Two_Final_Scene(int image_width, int sample_per_pixel, int max_dept
 void Triangle_Test();
 void ObjTest();
 void Teapot();
-void RenderAndPreview(Camera& cam, const Hittable& world);
-void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights);
+void Sponza();
+void PBR_Test();
+void PBR_Benchmark();
+void PBR_Normal_Map_Test();
 
 void RenderAndPreview(Camera& cam, const Hittable& world)
 {
@@ -38,7 +40,6 @@ void RenderAndPreview(Camera& cam, const Hittable& world)
 	preview.SetFinished(render_seconds);
 	preview.WaitUntilClosed();
 }
-
 void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights)
 {
 	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
@@ -51,7 +52,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (8)
+	switch (16)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -65,7 +66,82 @@ int main()
 		case 10:  Triangle_Test();                          break;
 		case 11:  ObjTest();								break;
 		case 12:  Teapot();									break;
+		case 13:  Sponza();                                 break;
+		case 14:  PBR_Test();                               break;
+		case 15:  PBR_Benchmark();                          break;
+		case 16:  PBR_Normal_Map_Test();                    break;
 	}
+}
+
+std::pair<Hittable_List, Hittable_List> BuildPBRValidationScene()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
+	auto ground_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+
+	world.add(std::make_shared<Quad>(
+		Point3(-8.0, -1.0, -8.0),
+		Vector3(16.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 16.0),
+		ground_mat));
+
+	auto make_pbr = [](const Color& base_color, double roughness, double metallic)
+	{
+		return std::make_shared<PBR_Material>(
+			std::make_shared<Solid_Color>(base_color),
+			nullptr,
+			std::make_shared<Solid_Color>(roughness, roughness, roughness),
+			std::make_shared<Solid_Color>(metallic, metallic, metallic));
+	};
+
+	world.add(std::make_shared<Sphere>(
+		Point3(-3.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.08, 0.0)));
+	world.add(std::make_shared<Sphere>(
+		Point3(-1.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.75, 0.0)));
+	world.add(std::make_shared<Sphere>(
+		Point3(1.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.08, 1.0)));
+	world.add(std::make_shared<Sphere>(
+		Point3(3.0, 0.5, 0.0),
+		0.5,
+		make_pbr(Color(0.95, 0.65, 0.2), 0.75, 1.0)));
+
+	auto quad_light = std::make_shared<Quad>(
+		Point3(-2.0, 5.5, 2.0),
+		Vector3(4.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, -4.0),
+		light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	return {
+		Hittable_List(std::make_shared<BVH_Node>(world)),
+		Hittable_List(lights)
+	};
+}
+
+Camera MakePBRValidationCamera()
+{
+	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 800;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 20;
+
+	cam.vfov = 35;
+	cam.lookfrom = Point3(0, 2.2, 8.5);
+	cam.lookat = Point3(0, 0.7, 0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.02, 0.02, 0.02);
+	return cam;
 }
 
 void Bouncing_Spheres()
@@ -342,7 +418,7 @@ void Cornell_Box()
 
 	cam.aspect_ratio = 1.0;
 	cam.image_width = 600;
-	cam.sample_per_pixel = 50;
+	cam.sample_per_pixel = 500;
 	cam.max_depth = 50;
 	cam.background = Color(0, 0, 0);
 
@@ -542,7 +618,7 @@ void ObjTest()
 	{
 		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
 
-		world.add(make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
+		world.add(std::make_shared<Translation>(bvh_model, Vector3(0, -5, 0)));
 		std::clog << "Model loaded and BVH built successfully.\n";
 	}
 	else
@@ -616,5 +692,193 @@ void Teapot()
 	cam.background = Color(0.70, 0.80, 1.00);
 
 	std::clog << "Start rendering Triangle PDF Test...\n";
+	RenderAndPreview(cam, world, lights);
+}
+
+void Sponza()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto gray_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+
+	std::clog << "Loading OBJ model...\n";
+	auto model_mesh = ObjLoader::load("Model/sponza.obj", gray_mat);
+
+	if (model_mesh)
+	{
+		auto bvh_model = std::make_shared<BVH_Node>(*model_mesh);
+		world.add(bvh_model);
+		std::clog << "Model loaded and BVH built successfully.\n";
+	}
+	else
+	{
+		std::clog << "Cannot find model!\n";
+	}
+
+	auto quad_light = std::make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 400;
+	cam.sample_per_pixel = 50;
+	cam.max_depth = 10;
+
+	cam.vfov = 45;
+	cam.lookfrom = Point3(0, 5, 9);
+	cam.lookat = Point3(0, 0, 0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.70, 0.80, 1.00);
+
+	std::clog << "Start rendering Sponza ...\n";
+	RenderAndPreview(cam, world, lights);
+}
+
+void PBR_Test()
+{
+	auto [world, lights] = BuildPBRValidationScene();
+	Camera cam = MakePBRValidationCamera();
+
+	std::clog << "Start rendering PBR validation scene...\n";
+	RenderAndPreview(cam, world, lights);
+}
+
+void PBR_Benchmark()
+{
+	auto [world, lights] = BuildPBRValidationScene();
+
+	Camera serial_cam = MakePBRValidationCamera();
+	serial_cam.render_mode = Camera::Render_Mode::Serial;
+	serial_cam.output_filename = "benchmark_serial.ppm";
+
+	Camera parallel_cam = MakePBRValidationCamera();
+	parallel_cam.render_mode = Camera::Render_Mode::Parallel;
+	parallel_cam.output_filename = "benchmark_parallel.ppm";
+
+	std::clog << "Benchmark scene: PBR validation\n";
+	std::clog << "Resolution: " << serial_cam.image_width << "x" << serial_cam.output_height()
+			  << ", spp: " << serial_cam.sample_per_pixel
+			  << ", depth: " << serial_cam.max_depth << "\n";
+
+	std::clog << "\n[Benchmark] Serial render...\n";
+	Timer serial_timer;
+	serial_cam.Render(world, lights);
+	const double serial_seconds = serial_timer.stop();
+
+	std::clog << "\n[Benchmark] Parallel render...\n";
+	Timer parallel_timer;
+	parallel_cam.Render(world, lights);
+	const double parallel_seconds = parallel_timer.stop();
+
+	const double speedup = parallel_seconds > 0.0 ? serial_seconds / parallel_seconds : 0.0;
+	const double reduction = serial_seconds > 0.0
+		? (1.0 - parallel_seconds / serial_seconds) * 100.0
+		: 0.0;
+
+	std::clog << "\n[Benchmark] Serial:   " << serial_seconds << " s\n";
+	std::clog << "[Benchmark] Parallel: " << parallel_seconds << " s\n";
+	std::clog << "[Benchmark] Speedup:  " << speedup << "x\n";
+	std::clog << "[Benchmark] Time reduced: " << reduction << "%\n";
+}
+
+void PBR_Normal_Map_Test()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(120, 120, 120));
+	auto fill_light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
+	auto ground_mat = std::make_shared<Lambertian>(Color(0.65, 0.65, 0.65));
+
+	auto base_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Color.jpg");
+	auto roughness_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Roughness.jpg");
+	auto metallic_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Metalness.jpg");
+	auto normal_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_NormalGL.jpg");
+
+	auto pbr_with_normal = std::make_shared<PBR_Material>(base_tex, normal_tex, roughness_tex, metallic_tex);
+	auto pbr_without_normal = std::make_shared<PBR_Material>(base_tex, nullptr, roughness_tex, metallic_tex);
+
+	world.add(std::make_shared<Quad>(
+		Point3(-8.0, -1.0, -8.0),
+		Vector3(16.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 16.0),
+		ground_mat));
+
+	auto add_panel = [&](const Point3& origin, std::shared_ptr<Material> mat)
+	{
+		const Point3 p0 = origin;
+		const Point3 p1 = origin + Vector3(2.4, 0.0, 0.0);
+		const Point3 p2 = origin + Vector3(2.4, 2.4, 0.0);
+		const Point3 p3 = origin + Vector3(0.0, 2.4, 0.0);
+
+		world.add(std::make_shared<Triangle>(
+			p0, p1, p2,
+			TexCoord2(0.0, 0.0), TexCoord2(1.0, 0.0), TexCoord2(1.0, 1.0),
+			mat));
+		world.add(std::make_shared<Triangle>(
+			p0, p2, p3,
+			TexCoord2(0.0, 0.0), TexCoord2(1.0, 1.0), TexCoord2(0.0, 1.0),
+			mat));
+	};
+
+	add_panel(Point3(-3.2, -0.2, 0.0), pbr_with_normal);
+	add_panel(Point3(0.8, -0.2, 0.0), pbr_without_normal);
+
+	world.add(std::make_shared<Sphere>(
+		Point3(-4.8, 0.2, 1.4),
+		0.8,
+		std::make_shared<PBR_Material>(
+			std::make_shared<Solid_Color>(Color(0.95, 0.65, 0.2)),
+			nullptr,
+			std::make_shared<Solid_Color>(0.08, 0.08, 0.08),
+			std::make_shared<Solid_Color>(1.0, 1.0, 1.0))));
+
+	world.add(std::make_shared<Sphere>(
+		Point3(4.2, 0.2, 1.4),
+		0.8,
+		std::make_shared<PBR_Material>(
+			std::make_shared<Solid_Color>(Color(0.95, 0.65, 0.2)),
+			nullptr,
+			std::make_shared<Solid_Color>(0.75, 0.75, 0.75),
+			std::make_shared<Solid_Color>(0.0, 0.0, 0.0))));
+
+	auto quad_light = std::make_shared<Quad>(
+		Point3(-2.8, 4.8, 3.2),
+		Vector3(5.6, 0.0, 0.0),
+		Vector3(0.0, 0.0, -6.2),
+		light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	auto fill_light = std::make_shared<Quad>(
+		Point3(-5.4, 0.8, 3.6),
+		Vector3(0.0, 3.0, 0.0),
+		Vector3(0.0, 0.0, -4.8),
+		fill_light_mat);
+	world.add(fill_light);
+	lights.add(fill_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 960;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 20;
+	cam.vfov = 27;
+	cam.lookfrom = Point3(0.0, 1.45, 6.6);
+	cam.lookat = Point3(0.0, 1.0, 0.35);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.16, 0.16, 0.16);
+	cam.output_filename = "pbr_normal_map_test.ppm";
+
+	std::clog << "Start rendering PBR normal map validation scene...\n";
 	RenderAndPreview(cam, world, lights);
 }

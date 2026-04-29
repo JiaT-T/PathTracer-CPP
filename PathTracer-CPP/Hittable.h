@@ -8,11 +8,15 @@ class HitRecord
 public :
 	Point3 p;
 	Vector3 n;
-	double t;
-	bool front_face;
+	Vector3 geo_n = Vector3(0, 1, 0);
+	Vector3 tangent = Vector3(1, 0, 0);
+	Vector3 bitangent = Vector3(0, 0, 1);
+	double t = 0.0;
+	bool front_face = false;
+	bool has_tangent_space = false;
 	std::shared_ptr<Material> mat;
-	double u;
-	double v;
+	double u = 0.0;
+	double v = 0.0;
 
 	// outward_normal is normalized
 	void set_face_front(const Ray& ray, const Vector3& outward_normal)
@@ -129,6 +133,24 @@ public :
 			rec.n.y(),
 			(-sin_theta * rec.n.x()) + (cos_theta * rec.n.z()));
 
+		rec.geo_n = Vector3(
+			(cos_theta * rec.geo_n.x()) + (sin_theta * rec.geo_n.z()),
+			rec.geo_n.y(),
+			(-sin_theta * rec.geo_n.x()) + (cos_theta * rec.geo_n.z()));
+
+		if (rec.has_tangent_space)
+		{
+			rec.tangent = Vector3(
+				(cos_theta * rec.tangent.x()) + (sin_theta * rec.tangent.z()),
+				rec.tangent.y(),
+				(-sin_theta * rec.tangent.x()) + (cos_theta * rec.tangent.z()));
+
+			rec.bitangent = Vector3(
+				(cos_theta * rec.bitangent.x()) + (sin_theta * rec.bitangent.z()),
+				rec.bitangent.y(),
+				(-sin_theta * rec.bitangent.x()) + (cos_theta * rec.bitangent.z()));
+		}
+
 		return true;
 	}
 
@@ -138,5 +160,65 @@ private :
 	std::shared_ptr<Hittable> object;
 	double sin_theta;
 	double cos_theta;
+	AABB bbox;
+};
+
+class Scale : public Hittable
+{
+public:
+	Scale(std::shared_ptr<Hittable> obj, const Vector3& s): object(std::move(obj)), scale(s)
+	{
+		init();
+	}
+
+	Scale(std::shared_ptr<Hittable> obj, double s)
+		: object(std::move(obj)), scale(Vector3(s, s, s))
+	{
+		init();
+	}
+
+	void init()
+	{
+		auto bbox_min = object->bounding_box().min() * scale;
+		auto bbox_max = object->bounding_box().max() * scale;
+
+		for (int i = 0; i < 3; i++) {
+			if (bbox_min[i] > bbox_max[i]) std::swap(bbox_min[i], bbox_max[i]);
+		}
+		bbox = AABB(bbox_min, bbox_max);
+		inv_scale = Vector3(1.0 / scale.x(), 1.0 / scale.y(), 1.0 / scale.z());
+	}
+
+	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
+	{
+		Ray scaled_ray(ray.origin() * inv_scale, ray.direction() * inv_scale, ray.time());
+
+		if (!object->Hit(scaled_ray, ray_t, rec))
+			return false;
+
+		rec.p *= scale;
+
+		rec.n *= inv_scale;
+		rec.n = normalize(rec.n);
+		rec.geo_n *= inv_scale;
+		rec.geo_n = normalize(rec.geo_n);
+
+		if (rec.has_tangent_space)
+		{
+			rec.tangent *= inv_scale;
+			rec.bitangent *= inv_scale;
+			rec.tangent = normalize(rec.tangent);
+			rec.bitangent = normalize(rec.bitangent);
+		}
+
+		return true;
+	}
+
+	AABB bounding_box() const override { return bbox; }
+
+private:
+	std::shared_ptr<Hittable> object;
+	Vector3 scale;
+	Vector3 inv_scale;
 	AABB bbox;
 };

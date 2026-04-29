@@ -3,12 +3,29 @@
 #include "Hittable.h"
 #include "Vector3.h"
 
+struct TexCoord2
+{
+	double x = 0.0;
+	double y = 0.0;
+
+	TexCoord2() = default;
+	TexCoord2(double x, double y) : x(x), y(y) {}
+};
+
 class Triangle : public Hittable
 {
 public :
 	// Flat Shading
 	Triangle(const Point3& v0, const Point3& v1, const Point3& v2, std::shared_ptr<Material> mat) : 
-		v0(v0), v1(v1), v2(v2), mat(mat), has_vertex_normal(false)
+		Triangle(v0, v1, v2, TexCoord2(), TexCoord2(), TexCoord2(), std::move(mat))
+	{
+	}
+
+	// Flat Shading with UV
+	Triangle(const Point3& v0, const Point3& v1, const Point3& v2,
+			 const TexCoord2& t0, const TexCoord2& t1, const TexCoord2& t2,
+			 std::shared_ptr<Material> mat) :
+		v0(v0), v1(v1), v2(v2), uv0(t0), uv1(t1), uv2(t2), has_vertex_normal(false), has_tangent_space(false), mat(std::move(mat))
 	{
 		auto edge1 = v1 - v0;
 		auto edge2 = v2 - v0;
@@ -17,15 +34,27 @@ public :
 		area = 0.5 * length;
 		face_normal = normalize(cross_product);
 		n0 = n1 = n2 = face_normal;
+		compute_tangent_space();
 		set_bounding_box();
+	}
+
+	// Smooth Shading without UV
+	Triangle(const Point3& v0, const Point3& v1, const Point3& v2,
+			 const Vector3& n0, const Vector3& n1, const Vector3& n2,
+			 std::shared_ptr<Material> mat) :
+		Triangle(v0, v1, v2, n0, n1, n2,
+				 TexCoord2(), TexCoord2(), TexCoord2(),
+				 std::move(mat))
+	{
 	}
 
 	// Smooth Shading
 	Triangle(const Point3& v0, const Point3& v1, const Point3& v2, 
 			 const Vector3& n0, const Vector3& n1, const Vector3& n2, 
+			 const TexCoord2& t0, const TexCoord2& t1, const TexCoord2& t2,
 			 std::shared_ptr<Material> mat) :
-			 v0(v0), v1(v1), v2(v2), n0(n0), n1(n1), n2(n2),
-			 mat(std::move(mat)), has_vertex_normal(true)
+			 v0(v0), v1(v1), v2(v2), n0(n0), n1(n1), n2(n2), uv0(t0), uv1(t1), uv2(t2),
+			 has_vertex_normal(true), has_tangent_space(false), mat(std::move(mat))
 	{
 		auto edge1 = v1 - v0;
 		auto edge2 = v2 - v0;
@@ -34,6 +63,7 @@ public :
 		area = 0.5 * length;
 		face_normal = cross_product / length;
 
+		compute_tangent_space();
 		set_bounding_box();
 	}
 
@@ -84,10 +114,42 @@ private :
 	Point3 v0, v1, v2;
 	Vector3 face_normal;
 	Vector3 n0, n1, n2;
+	Vector3 tangent;
+	Vector3 bitangent;
+	TexCoord2 uv0, uv1, uv2;
 	bool has_vertex_normal;
+	bool has_tangent_space;
 	std::shared_ptr<Material> mat;
 	AABB bbox;
 	double area;
+
+	void compute_tangent_space()
+	{
+		has_tangent_space = false;
+
+		Vector3 edge1 = v1 - v0;
+		Vector3 edge2 = v2 - v0;
+
+		double du1 = uv1.x - uv0.x;
+		double dv1 = uv1.y - uv0.y;
+		double du2 = uv2.x - uv0.x;
+		double dv2 = uv2.y - uv0.y;
+
+		double det = du1 * dv2 - du2 * dv1;
+		if (std::fabs(det) < 0.000001) return;
+
+		double inv_det = 1.0 / det;
+
+		tangent = inv_det * (dv2 * edge1 - dv1 * edge2);
+		bitangent = inv_det * (-du2 * edge1 + du1 * edge2);
+
+		if (tangent.length_squared() < 1e-10 || bitangent.length_squared() < 1e-10)
+			return;
+
+		tangent = normalize(tangent);
+		bitangent = normalize(bitangent);
+		has_tangent_space = true;
+	}
 };
 
 inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
@@ -138,10 +200,18 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	else
 		rec.p -= face_normal * 0.001;
 
+	// Texture coordinates interpolation
+	double w = 1.0 - u - v;
+	rec.u = w * uv0.x + u * uv1.x + v * uv2.x;
+	rec.v = w * uv0.y + u * uv1.y + v * uv2.y;
+
 	rec.mat = mat;
-	rec.u = u;
-	rec.v = v;
 	rec.set_face_front(ray, shading_normal);
+
+	rec.geo_n = face_normal;
+	rec.tangent = tangent;
+	rec.bitangent = bitangent;
+	rec.has_tangent_space = has_tangent_space;
 
 	return true;
 }

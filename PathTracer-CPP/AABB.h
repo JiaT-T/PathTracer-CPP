@@ -76,6 +76,16 @@ public :
 		else return x.size() < z.size() ? 2 : 0;
 	}
 
+	Point3 min() const
+	{
+		return Point3(x.min, y.min, z.min);
+	}
+
+	Point3 max() const
+	{
+		return Point3(x.max, y.max, z.max);
+	}
+
 	static const AABB empty, universe;
 
 private :
