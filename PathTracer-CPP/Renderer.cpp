@@ -52,7 +52,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (16)
+	switch (14)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -742,10 +742,65 @@ void Sponza()
 
 void PBR_Test()
 {
-	auto [world, lights] = BuildPBRValidationScene();
-	Camera cam = MakePBRValidationCamera();
+	Hittable_List world;
+	Hittable_List lights;
 
-	std::clog << "Start rendering PBR validation scene...\n";
+	auto red = std::make_shared<Lambertian>(Color(.65, .05, .05));
+	auto white = std::make_shared<Lambertian>(Color(.73, .73, .73));
+	auto green = std::make_shared<Lambertian>(Color(.12, .45, .15));
+	auto light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
+
+	world.add(std::make_shared<Quad>(Point3(555,   0,   0), Vector3(   0, 555,   0), Vector3(0,   0, 555), green));
+	world.add(std::make_shared<Quad>(Point3(  0,   0,   0), Vector3(   0, 555,   0), Vector3(0,   0, 555), red));
+	world.add(std::make_shared<Quad>(Point3(  0,   0,   0), Vector3( 555,   0,   0), Vector3(0,   0, 555), white));
+	world.add(std::make_shared<Quad>(Point3(555, 555, 555), Vector3(-555,   0,   0), Vector3(0,   0,-555), white));
+	world.add(std::make_shared<Quad>(Point3(  0,   0, 555), Vector3( 555,   0,   0), Vector3(0, 555,   0), white));
+
+	auto ornament_pbr = std::make_shared<PBR_Material>(
+		std::make_shared<Image_Texture>("images/ChristmasTreeOrnament019/ChristmasTreeOrnament019_1K-JPG_Color.jpg"),
+		std::make_shared<Image_Texture>("images/ChristmasTreeOrnament019/ChristmasTreeOrnament019_1K-JPG_NormalGL.jpg"),
+		std::make_shared<Image_Texture>("images/ChristmasTreeOrnament019/ChristmasTreeOrnament019_1K-JPG_Roughness.jpg"),
+		std::make_shared<Image_Texture>("images/ChristmasTreeOrnament019/ChristmasTreeOrnament019_1K-JPG_Metalness.jpg"));
+
+	std::clog << "Loading cube OBJ for PBR test...\n";
+	auto cube_mesh = ObjLoader::load("Model/Sphere.obj", ornament_pbr, true);
+	if (cube_mesh)
+	{
+		std::shared_ptr<Hittable> cube = std::make_shared<BVH_Node>(*cube_mesh);
+		cube = std::make_shared<Scale>(cube, 160.0);
+		cube = std::make_shared<Rotate_Y>(cube, 26.0);
+		cube = std::make_shared<Translation>(cube, Vector3(278.0, 160.0, 278.0));
+		world.add(cube);
+	}
+	else
+	{
+		std::clog << "Failed to load sphere.obj\n";
+	}
+
+	auto quad_light = std::make_shared<Quad>(
+		Point3(343, 554, 332),
+		Vector3(-130, 0, 0),
+		Vector3(0, 0, -105),
+		light_mat);
+	world.add(quad_light);
+	lights.add(quad_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 1.0;
+	cam.image_width = 700;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 20;
+	cam.vfov = 40;
+	cam.lookfrom = Point3(278, 278, -800);
+	cam.lookat = Point3(278, 200, 278);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0, 0, 0);
+	cam.output_filename = "pbr_cube_ornament_test.ppm";
+
+	std::clog << "Start rendering Cornell-box cube ornament PBR test scene...\n";
 	RenderAndPreview(cam, world, lights);
 }
 
@@ -796,9 +851,9 @@ void PBR_Normal_Map_Test()
 	auto fill_light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
 	auto ground_mat = std::make_shared<Lambertian>(Color(0.65, 0.65, 0.65));
 
-	auto base_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Color.jpg");
-	auto roughness_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Roughness.jpg");
-	auto metallic_tex = std::make_shared<Image_Texture>("Metal048C_1K-JPG_Metalness.jpg");
+	auto base_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_Color.jpg");
+	auto roughness_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_Roughness.jpg");
+	auto metallic_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_Metalness.jpg");
 	auto normal_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_NormalGL.jpg");
 
 	auto pbr_with_normal = std::make_shared<PBR_Material>(base_tex, normal_tex, roughness_tex, metallic_tex);

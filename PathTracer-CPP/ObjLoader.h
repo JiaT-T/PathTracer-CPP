@@ -12,7 +12,7 @@
 class ObjLoader {
 public:
     static std::shared_ptr<Hittable_List> load(
-        const std::filesystem::path& filepath, std::shared_ptr<Material> default_mat)
+        const std::filesystem::path& filepath, std::shared_ptr<Material> default_mat, bool ignore_obj_materials = false)
     {
         auto mesh_list = std::make_shared<Hittable_List>();
         const std::filesystem::path obj_directory = filepath.has_parent_path() ? filepath.parent_path() : std::filesystem::path(".");
@@ -95,7 +95,7 @@ public:
                     }
 
                     std::shared_ptr<Material> face_material = default_mat;
-                    if (f < shapes[s].mesh.material_ids.size())
+                    if (!ignore_obj_materials && f < shapes[s].mesh.material_ids.size())
                     {
                         int material_id = shapes[s].mesh.material_ids[f];
                         if (material_id >= 0 && static_cast<size_t>(material_id) < materials.size())
@@ -156,26 +156,81 @@ private:
         if (cached_material)
             return cached_material;
 
+        std::shared_ptr<Texture>      base_tex = nullptr;
+        std::shared_ptr<Texture>    normal_tex = nullptr;
+        std::shared_ptr<Texture> roughness_tex = nullptr;
+        std::shared_ptr<Texture>  metallic_tex = nullptr;
+
+        // Has Diffuse Texture
         if (!source_material.diffuse_texname.empty())
-        {
-            const std::filesystem::path texture_path = obj_directory / source_material.diffuse_texname;
-            cached_material = std::make_shared<Lambertian>(
-                std::make_shared<Image_Texture>(texture_path.string()));
-            return cached_material;
-        }
+            base_tex = load_texture(obj_directory, source_material.diffuse_texname);
 
         const Color diffuse_color(
             source_material.diffuse[0],
             source_material.diffuse[1],
             source_material.diffuse[2]);
 
+        if (!base_tex && diffuse_color.length_squared() > 0.0)
+            base_tex = std::make_shared<Solid_Color>(diffuse_color);
+
+        // Load PBR Textures if available
+        if (!source_material.normal_texname.empty())
+            normal_tex = load_texture(obj_directory, source_material.normal_texname);
+        else if (!source_material.bump_texname.empty())
+            normal_tex = load_texture(obj_directory, source_material.bump_texname);
+
+        roughness_tex = load_texture(obj_directory, source_material.roughness_texname);
+        metallic_tex = load_texture(obj_directory, source_material.metallic_texname);
+        std::clog << "Material: " << source_material.name << "\n";
+        std::clog << "  diffuse: " << source_material.diffuse_texname << "\n";
+        std::clog << "  normal: " << source_material.normal_texname << "\n";
+        std::clog << "  roughness: " << source_material.roughness_texname << "\n";
+        std::clog << "  metallic: " << source_material.metallic_texname << "\n";
+
+        bool has_pbr_maps =
+            (normal_tex != nullptr) ||
+            (roughness_tex != nullptr) ||
+            (metallic_tex != nullptr);
+
+        if (has_pbr_maps)
+        {
+            cached_material = std::make_shared<PBR_Material>(
+                base_tex,
+                normal_tex,
+                roughness_tex,
+                metallic_tex
+            );
+            std::clog << "  using: PBR_Material\n";
+            return cached_material;
+        }
+
+        if (!source_material.diffuse_texname.empty())
+        {
+            cached_material = std::make_shared<Lambertian>(base_tex);
+            std::clog << "  using: Lambertian(texture)\n";
+            return cached_material;
+        }
+
         if (diffuse_color.length_squared() > 0.0)
         {
-            cached_material = std::make_shared<Lambertian>(diffuse_color);
+            cached_material = std::make_shared<Lambertian>(base_tex);
+            std::clog << "  using: Lambertian(color)\n";
             return cached_material;
         }
 
         cached_material = default_mat;
+        std::clog << "  using: default material\n";
         return cached_material;
+    }
+
+    static std::shared_ptr<Texture> load_texture(
+        const std::filesystem::path& obj_directory,
+        const std::string& texname)
+    {
+        if (texname.empty())
+            return nullptr;
+
+        std::filesystem::path texture_path = obj_directory / texname;
+        return std::make_shared<Image_Texture>(texture_path.string());
     }
 };
