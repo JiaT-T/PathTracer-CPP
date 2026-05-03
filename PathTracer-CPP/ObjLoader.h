@@ -2,6 +2,7 @@
 #include<vector>
 #include<string>
 #include<memory>
+#include<cctype>
 #include<filesystem>
 #include "Triangle.h"
 #include "Material.h"
@@ -163,7 +164,7 @@ private:
 
         // Has Diffuse Texture
         if (!source_material.diffuse_texname.empty())
-            base_tex = load_texture(obj_directory, source_material.diffuse_texname);
+            base_tex = load_texture(obj_directory, source_material.diffuse_texname, color_space::SRGB);
 
         const Color diffuse_color(
             source_material.diffuse[0],
@@ -175,12 +176,12 @@ private:
 
         // Load PBR Textures if available
         if (!source_material.normal_texname.empty())
-            normal_tex = load_texture(obj_directory, source_material.normal_texname);
+            normal_tex = load_texture(obj_directory, source_material.normal_texname, color_space::Linear);
         else if (!source_material.bump_texname.empty())
-            normal_tex = load_texture(obj_directory, source_material.bump_texname);
+            normal_tex = load_texture(obj_directory, source_material.bump_texname, color_space::Linear);
 
-        roughness_tex = load_texture(obj_directory, source_material.roughness_texname);
-        metallic_tex = load_texture(obj_directory, source_material.metallic_texname);
+        roughness_tex = load_texture(obj_directory, source_material.roughness_texname, color_space::Linear);
+        metallic_tex = load_texture(obj_directory, source_material.metallic_texname, color_space::Linear);
         std::clog << "Material: " << source_material.name << "\n";
         std::clog << "  diffuse: " << source_material.diffuse_texname << "\n";
         std::clog << "  normal: " << source_material.normal_texname << "\n";
@@ -194,11 +195,15 @@ private:
 
         if (has_pbr_maps)
         {
+            const auto normal_map_convention = infer_normal_map_convention(
+                !source_material.normal_texname.empty() ? source_material.normal_texname
+                                                        : source_material.bump_texname);
             cached_material = std::make_shared<PBR_Material>(
                 base_tex,
                 normal_tex,
                 roughness_tex,
-                metallic_tex
+                metallic_tex,
+                normal_map_convention
             );
             std::clog << "  using: PBR_Material\n";
             return cached_material;
@@ -232,5 +237,34 @@ private:
 
         std::filesystem::path texture_path = obj_directory / texname;
         return std::make_shared<Image_Texture>(texture_path.string());
+    }
+
+    static std::shared_ptr<Texture> load_texture(
+        const std::filesystem::path& obj_directory,
+        const std::string& texname,
+        color_space colorSpace)
+    {
+        if (texname.empty())
+            return nullptr;
+
+        std::filesystem::path texture_path = obj_directory / texname;
+        return std::make_shared<Image_Texture>(texture_path.string(), colorSpace);
+    }
+
+    static PBR_Material::Normal_Map_Convention infer_normal_map_convention(const std::string& texname)
+    {
+        std::string lowered;
+        lowered.reserve(texname.size());
+        for (char ch : texname)
+            lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+
+        if (lowered.find("normaldx") != std::string::npos ||
+            lowered.find("_dx") != std::string::npos ||
+            lowered.find("directx") != std::string::npos)
+        {
+            return PBR_Material::Normal_Map_Convention::DirectX;
+        }
+
+        return PBR_Material::Normal_Map_Convention::OpenGL;
     }
 };

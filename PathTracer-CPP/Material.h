@@ -243,8 +243,23 @@ private:
 class PBR_Material : public Material
 {
 public :
-	PBR_Material(std::shared_ptr<Texture> base_tex, std::shared_ptr<Texture> normal_tex, std::shared_ptr<Texture> roughness_tex, std::shared_ptr<Texture> metallic_tex)
-		: base_tex(base_tex), normal_tex(normal_tex), roughness_tex(roughness_tex), metallic_tex(metallic_tex) {}
+	enum class Normal_Map_Convention
+	{
+		OpenGL,
+		DirectX
+	};
+
+	PBR_Material(
+		std::shared_ptr<Texture> base_tex,
+		std::shared_ptr<Texture> normal_tex,
+		std::shared_ptr<Texture> roughness_tex,
+		std::shared_ptr<Texture> metallic_tex,
+		Normal_Map_Convention normal_map_convention = Normal_Map_Convention::OpenGL)
+		: base_tex(base_tex),
+		  normal_tex(normal_tex),
+		  roughness_tex(roughness_tex),
+		  metallic_tex(metallic_tex),
+		  normal_map_convention(normal_map_convention) {}
 
 	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
@@ -399,6 +414,8 @@ private:
 			2.0 * normal_color.y() - 1.0,
 			2.0 * normal_color.z() - 1.0
 		);
+		if (normal_map_convention == Normal_Map_Convention::DirectX)
+			n_ts[1] = -n_ts[1];
 		n_ts = normalize(n_ts);
 
 		Vector3 N = rec.n;
@@ -428,4 +445,5 @@ private:
 	std::shared_ptr<Texture> normal_tex;
 	std::shared_ptr<Texture> roughness_tex;
 	std::shared_ptr<Texture> metallic_tex;
+	Normal_Map_Convention normal_map_convention;
 };

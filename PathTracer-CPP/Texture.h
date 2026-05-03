@@ -4,11 +4,26 @@
 #include "rtw_stb_image.h"
 #include "Perlin_Noise.h"
 
+enum class color_space
+{
+	SRGB,
+	Linear
+};
+
+
+
 class Texture
 {
 public :
 	virtual ~Texture() = default;
 	virtual Color value(double u, double v, const Point3& p) const = 0;
+
+	static double srgb_to_linear(double x)
+	{
+		if (x <= 0.04045)
+			return x / 12.92;
+		return std::pow((x + 0.055) / 1.055, 2.4);
+	}
 };
 
 
@@ -57,6 +72,7 @@ class Image_Texture : public Texture
 public :
 	Image_Texture(const char* filename) : image(filename) {}
 	Image_Texture(const std::string& filename) : image(filename.c_str()) {}
+	Image_Texture(const std::string& filename, color_space cs) : image(filename.c_str()), colorSpace(cs) {}
 	Color value(double u, double v, const Point3& p) const override
 	{
 		// If there is no image data, return magenta as a debugging aid.
@@ -71,11 +87,24 @@ public :
 		auto pixel = image.pixel_data(i, j);
 
 		auto color_scale = 1.0 / 255.0;
-		return Color(color_scale * pixel[0], color_scale * pixel[1], color_scale * pixel[2]);
+		auto r = color_scale * pixel[0];
+		auto g = color_scale * pixel[1];
+		auto b = color_scale * pixel[2];
+		switch (colorSpace)
+		{
+		case color_space::SRGB:
+			return Color(Texture::srgb_to_linear(r), Texture::srgb_to_linear(g), Texture::srgb_to_linear(b));
+
+		case color_space::Linear:
+			return Color(r, g, b);
+		}
+
+		return Color(r, g, b);
 	}
 
 private :
 	rtw_image image;
+	color_space colorSpace = color_space::SRGB;
 };
 
 
