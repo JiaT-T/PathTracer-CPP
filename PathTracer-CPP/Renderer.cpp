@@ -948,7 +948,7 @@ void Obj_PBR_Test()
 	auto red = make_shared<Lambertian>(Color(.65, .05, .05));
 	auto white = make_shared<Lambertian>(Color(.73, .73, .73));
 	auto green = make_shared<Lambertian>(Color(.12, .45, .15));
-	auto light = make_shared<Diffuse_Light>(Color(15, 15, 15));
+	auto light = make_shared<Diffuse_Light>(Color(50, 50, 50));
 	auto fallback_mat = make_shared<Lambertian>(Color(.73, .73, .73));
 
 	world.add(make_shared<Quad>(Point3(555,   0,   0), Vector3(   0, 555,   0), Vector3(0,   0,  555), green));
