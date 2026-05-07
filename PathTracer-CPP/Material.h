@@ -294,11 +294,6 @@ private:
 		return std::clamp(value.x(), min_value, max_value);
 	}
 
-	static Color lerp(const Color& a, const Color& b, double t)
-	{
-		return a * (1.0 - t) + b * t;
-	}
-
 	Vector3 fresnel_schlick(double cos_theta, const Vector3& F0) const
 	{
 		const auto x = std::clamp(1.0 - cos_theta, 0.0, 1.0);

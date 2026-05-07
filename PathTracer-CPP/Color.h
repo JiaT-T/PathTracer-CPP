@@ -75,3 +75,8 @@ inline void write_color(std::ostream& out, const Color& color)
 		<< static_cast<int>(bytes.g) << ' '
 		<< static_cast<int>(bytes.b) << '\n';
 }
+
+inline Color lerp(const Color& a, const Color& b, double t)
+{
+	return a * (1.0 - t) + b * t;
+}
