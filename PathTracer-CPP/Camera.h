@@ -14,6 +14,14 @@
 #include "PDF.h"
 #include "PPMPreviewWindow.h"
 
+static double power_heuristic(double pdf_a, double pdf_b)
+{
+	double a2 = pdf_a * pdf_a;
+	double b2 = pdf_b * pdf_b;
+	double denom = a2 + b2;
+	return a2 <= 0.0 ? 0.0 : a2 / denom;
+}
+
 class Camera
 {
 public : 
@@ -397,7 +405,8 @@ private :
 			return emitted_color;
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const Vector3 shading_normal = rec.mat->ShadingNormal(rec);
+		const double cos_theta = std::max(dot(shading_normal, normalize(scattered.direction())), 0.0);
 		const Color sample_color = ray_color(scattered, depth - 1, world);
 		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / pdf_value;
 
@@ -426,15 +435,43 @@ private :
 		}
 
 		auto p_light = std::make_shared<Hittable_PDF>(lights, rec.p);
-		Mixture_PDF mixture_pdf(p_light, s_rec.p_pdf);
 
-		Ray scattered(rec.p, mixture_pdf.generate(), ray.time());
-		const double pdf_value = mixture_pdf.value(scattered.direction());
-		if (pdf_value <= 0.0)
+		const double light_choose_prob = 0.5;
+		const double bsdf_choose_prob = 0.5;
+		bool sample_light = random_double() < light_choose_prob;
+		double mis_weight = 0.0, choose_prob = 0.0, strategy_pdf = 0.0;
+		Ray scattered;
+		if (sample_light)
+		{
+			// Sample a ray from the light source
+			Vector3 dir = p_light->generate();
+			scattered = Ray(rec.p, dir, ray.time());
+			strategy_pdf = p_light->value(dir);
+			choose_prob = light_choose_prob;
+			double light_pdf_val = p_light->value(scattered.direction());
+			double bsdf_pdf_val = s_rec.p_pdf->value(scattered.direction());
+
+			mis_weight = power_heuristic(light_pdf_val, bsdf_pdf_val);
+		}
+		else
+		{
+			// Sample a ray from the BSDF
+			Vector3 dir = s_rec.p_pdf->generate();
+			scattered = Ray(rec.p, dir, ray.time());
+			strategy_pdf = s_rec.p_pdf->value(dir);
+			choose_prob = bsdf_choose_prob;
+			double light_pdf_val = p_light->value(scattered.direction());
+			double bsdf_pdf_val = s_rec.p_pdf->value(scattered.direction());
+
+			mis_weight = power_heuristic(bsdf_pdf_val, light_pdf_val);
+		}
+
+		if (strategy_pdf <= 0.0)
 			return emitted_color;
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const Vector3 shading_normal = rec.mat->ShadingNormal(rec);
+		const double cos_theta = std::max(dot(shading_normal, normalize(scattered.direction())), 0.0);
 		if (cos_theta <= 0.0)
 			return emitted_color;
 
@@ -442,7 +479,10 @@ private :
 		const int bounce = max_depth - depth;
 		if (bounce >= 3)
 		{
-			const Color rr_weight = s_rec.attenuation * f * cos_theta / pdf_value;
+			const Color rr_weight =
+				s_rec.attenuation * f * cos_theta * mis_weight
+				/ (choose_prob * strategy_pdf);
+
 			p_survival = std::clamp(
 				std::fmax(rr_weight.x(), std::fmax(rr_weight.y(), rr_weight.z())),
 				0.0001,
@@ -452,9 +492,11 @@ private :
 		}
 
 		const Color sample_color = ray_color(scattered, depth - 1, world, lights);
-		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / (pdf_value * p_survival);
+		const Color scattered_color =
+			(s_rec.attenuation * f * sample_color * cos_theta * mis_weight)
+			/ (choose_prob * strategy_pdf * p_survival);
+
 
 		return emitted_color + scattered_color;
 	}
 };
-

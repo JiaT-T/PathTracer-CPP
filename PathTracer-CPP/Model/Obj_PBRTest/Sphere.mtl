@@ -1,0 +1,15 @@
+# Blender 4.5.1 LTS MTL File: 'None'
+# www.blender.org
+
+newmtl christmas_ornament_pbr
+Ka 0.000000 0.000000 0.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ns 250.000000
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd textures/ChristmasTreeOrnament019_1K-JPG_Color.jpg
+norm textures/ChristmasTreeOrnament019_1K-JPG_NormalGL.jpg
+map_Pr textures/ChristmasTreeOrnament019_1K-JPG_Roughness.jpg
+map_Pm textures/ChristmasTreeOrnament019_1K-JPG_Metalness.jpg

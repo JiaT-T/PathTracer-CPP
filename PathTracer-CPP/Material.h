@@ -25,6 +25,7 @@ public:
 	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
 	virtual Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return Color(0, 0, 0); }
 	virtual double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
+	virtual Vector3 ShadingNormal(const HitRecord& rec) const { return rec.n; }
 };
 
 
@@ -178,91 +179,41 @@ private :
 };
 
 
-class GGX_PDF : public PDF
-{
-public:
-	GGX_PDF(const Vector3& normal, const Vector3& view_dir, double roughness)
-		: uvw(normal), view_dir(normalize(view_dir)), roughness(std::clamp(roughness, 0.05, 1.0)) {}
-
-	double value(const Vector3& dir) const override
-	{
-		const Vector3 l = normalize(dir);
-		const double n_dot_l = dot(uvw.w(), l);
-		if (n_dot_l <= 0.0)
-			return 0.0;
-
-		const Vector3 h = normalize(view_dir + l);
-		const double n_dot_h = std::max(dot(uvw.w(), h), 0.0);
-		const double v_dot_h = std::max(dot(view_dir, h), 1e-6);
-		if (n_dot_h <= 0.0)
-			return 0.0;
-
-		const double alpha = roughness * roughness;
-		const double alpha2 = alpha * alpha;
-		const double denom = (n_dot_h * n_dot_h) * (alpha2 - 1.0) + 1.0;
-		const double D = alpha2 / (pi * denom * denom);
-
-		return (D * n_dot_h) / (4.0 * v_dot_h);
-	}
-
-	Vector3 generate() const override
-	{
-		const Vector3 half_vector = sample_half_vector();
-		Vector3 reflected = reflect(-view_dir, half_vector);
-		if (dot(reflected, uvw.w()) <= 0.0)
-			reflected = uvw.w();
-		return normalize(reflected);
-	}
-
-private:
-	Vector3 sample_half_vector() const
-	{
-		const double u1 = random_double();
-		const double u2 = random_double();
-		const double alpha = roughness * roughness;
-		const double alpha2 = alpha * alpha;
-		const double phi = 2.0 * pi * u1;
-		const double cos_theta = std::sqrt((1.0 - u2) / (1.0 + (alpha2 - 1.0) * u2));
-		const double sin_theta = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
-
-		const Vector3 local_half(
-			std::cos(phi) * sin_theta,
-			std::sin(phi) * sin_theta,
-			cos_theta);
-
-		return normalize(uvw.transform(local_half));
-	}
-
-	ONB uvw;
-	Vector3 view_dir;
-	double roughness;
-};
-
-
 
 class PBR_Material : public Material
 {
 public :
-	PBR_Material(std::shared_ptr<Texture> base_tex, std::shared_ptr<Texture> normal_tex, std::shared_ptr<Texture> roughness_tex, std::shared_ptr<Texture> metallic_tex)
-		: base_tex(base_tex), normal_tex(normal_tex), roughness_tex(roughness_tex), metallic_tex(metallic_tex) {}
+	enum class Normal_Map_Convention
+	{
+		OpenGL,
+		DirectX
+	};
+
+	PBR_Material(
+		std::shared_ptr<Texture> base_tex,
+		std::shared_ptr<Texture> normal_tex,
+		std::shared_ptr<Texture> roughness_tex,
+		std::shared_ptr<Texture> metallic_tex,
+		Normal_Map_Convention normal_map_convention = Normal_Map_Convention::OpenGL)
+		: base_tex(base_tex),
+		  normal_tex(normal_tex),
+		  roughness_tex(roughness_tex),
+		  metallic_tex(metallic_tex),
+		  normal_map_convention(normal_map_convention) {}
 
 	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
-		const double specular_weight = std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
+		const double specular_weight = compute_specular_weight(metallic);
+		const double diffuse_weight = 1.0 - specular_weight;
 		const Vector3 n = sample_shading_normal(rec);
 
 		s_rec.attenuation = Color(1.0, 1.0, 1.0);
 		auto diffuse_pdf = std::make_shared<Cosine_PDF>(n);
 		auto specular_pdf = std::make_shared<GGX_PDF>(n, normalize(-ray_in.direction()), roughness);
 
-		if (specular_weight <= 0.0)
-			s_rec.p_pdf = diffuse_pdf;
-		else if (specular_weight >= 1.0)
-			s_rec.p_pdf = specular_pdf;
-		else
-			s_rec.p_pdf = std::make_shared<Mixture_PDF>(diffuse_pdf, specular_pdf);
+		s_rec.p_pdf = std::make_shared<Mixture_PDF>(diffuse_pdf, specular_pdf, diffuse_weight);
 		s_rec.skip_pdf = false;
 		return true;
 	}
@@ -294,17 +245,19 @@ public :
 	{
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
-		const double specular_weight = std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
+		const double specular_weight = compute_specular_weight(metallic);
+		const double diffuse_weight = 1.0 - specular_weight;
 		const Vector3 n = sample_shading_normal(rec);
 		const Cosine_PDF diffuse_pdf(n);
 		const GGX_PDF specular_pdf(n, normalize(-ray_in.direction()), roughness);
 
-		if (specular_weight <= 0.0)
-			return diffuse_pdf.value(scattered.direction());
-		if (specular_weight >= 1.0)
-			return specular_pdf.value(scattered.direction());
+		return diffuse_weight * diffuse_pdf.value(scattered.direction()) + 
+			   specular_weight * specular_pdf.value(scattered.direction());
+	}
 
-		return 0.5 * diffuse_pdf.value(scattered.direction()) + 0.5 * specular_pdf.value(scattered.direction());
+	Vector3 ShadingNormal(const HitRecord& rec) const override
+	{
+		return sample_shading_normal(rec);
 	}
 
 	Vector3 cook_torrance_specular(
@@ -345,11 +298,6 @@ private:
 
 		const Color value = tex->value(rec.u, rec.v, rec.p);
 		return std::clamp(value.x(), min_value, max_value);
-	}
-
-	static Color lerp(const Color& a, const Color& b, double t)
-	{
-		return a * (1.0 - t) + b * t;
 	}
 
 	Vector3 fresnel_schlick(double cos_theta, const Vector3& F0) const
@@ -399,6 +347,8 @@ private:
 			2.0 * normal_color.y() - 1.0,
 			2.0 * normal_color.z() - 1.0
 		);
+		if (normal_map_convention == Normal_Map_Convention::DirectX)
+			n_ts[1] = -n_ts[1];
 		n_ts = normalize(n_ts);
 
 		Vector3 N = rec.n;
@@ -424,8 +374,14 @@ private:
 		return n_ws;
 	}
 
+	static double compute_specular_weight(double metallic)
+	{
+		return std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
+	}
+
 	std::shared_ptr<Texture> base_tex;
 	std::shared_ptr<Texture> normal_tex;
 	std::shared_ptr<Texture> roughness_tex;
 	std::shared_ptr<Texture> metallic_tex;
+	Normal_Map_Convention normal_map_convention;
 };
