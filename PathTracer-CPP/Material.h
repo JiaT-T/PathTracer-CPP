@@ -25,6 +25,7 @@ public:
 	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
 	virtual Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return Color(0, 0, 0); }
 	virtual double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
+	virtual Vector3 ShadingNormal(const HitRecord& rec) const { return rec.n; }
 };
 
 
@@ -252,6 +253,11 @@ public :
 
 		return diffuse_weight * diffuse_pdf.value(scattered.direction()) + 
 			   specular_weight * specular_pdf.value(scattered.direction());
+	}
+
+	Vector3 ShadingNormal(const HitRecord& rec) const override
+	{
+		return sample_shading_normal(rec);
 	}
 
 	Vector3 cook_torrance_specular(
