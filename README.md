@@ -1,138 +1,137 @@
 # PathTracer-CPP
 
-`PathTracer-CPP` is a C++20 CPU path tracer built for learning and extending physically based rendering techniques.  
-The project started from the [Ray Tracing](https://github.com/RayTracing/raytracing.github.io) book series and has since been expanded with triangle meshes, OBJ/MTL loading, texture-driven materials, multithreaded tiled rendering, and a staged PBR pipeline.
+`PathTracer-CPP` 是一个使用 `C++20` 编写的 CPU 路径追踪器学习项目。  
+项目最初参考了 [Ray Tracing](https://github.com/RayTracing/raytracing.github.io) 系列教程，并在此基础上逐步扩展了三角形网格、OBJ/MTL 加载、纹理驱动材质、多线程分块渲染以及分阶段推进的 PBR 流程。
 
-Repository: [JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
+仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
 
-## Current Status
+## 当前进展
 
-### Implemented Core Features
+### 已实现的核心能力
 
-- Geometry: `Sphere`, `Triangle`, `Quad`, `Box`
-- Acceleration: `AABB`, `BVH`
-- Transforms: `Translation`, `Rotate_Y`, `Scale`
-- Legacy materials: `Lambertian`, `Metal`, `Dielectric`, `Diffuse_Light`, `isotropic`
-- Textures: `Solid_Color`, `Checker_Texture`, `Image_Texture`, `Noise_Texture`
-- Sampling infrastructure: `Cosine_PDF`, `Hittable_PDF`, `Mixture_PDF`
-- Camera effects: depth of field, motion blur
-- Volumetric rendering: constant medium
-- Real-time preview window for PPM output
-- Tiled multithreaded rendering based on `std::execution::par`
+- 几何体：`Sphere`、`Triangle`、`Quad`、`Box`
+- 加速结构：`AABB`、`BVH`
+- 变换：`Translation`、`Rotate_Y`、`Scale`
+- 传统材质：`Lambertian`、`Metal`、`Dielectric`、`Diffuse_Light`、`isotropic`
+- 纹理：`Solid_Color`、`Checker_Texture`、`Image_Texture`、`Noise_Texture`
+- 采样基础设施：`Cosine_PDF`、`Hittable_PDF`、`Mixture_PDF`
+- 相机效果：景深、运动模糊
+- 体积渲染：常量介质
+- 实时 PPM 预览窗口
+- 基于 `std::execution::par` 的 tile 分块并行渲染
 
-### PBR Phase 2
+### PBR 第二阶段已完成内容
 
-The renderer now has a usable metallic-roughness PBR pipeline:
+当前渲染器已经具备一条可用的 metallic-roughness PBR 管线：
 
-- `PBR_Material` with `Scatter + Eval + PDF` separation
-- Path throughput updated to the standard `Li * f * cos / pdf` form
-- GGX microfacet BRDF with Schlick Fresnel and Smith masking-shadowing
-- Texture-driven `baseColor / roughness / metallic / normal`
-- Tangent-space normal mapping with TBN construction on triangle meshes
-- `OpenGL / DirectX` normal map convention handling
-- Input color-space separation:
-  - `baseColor`: `sRGB -> linear`
-  - `roughness / metallic / normal`: linear data
-- Output display transform:
+- 新增 `PBR_Material`
+- 材质接口拆分为 `Scatter + Eval + PDF`
+- 路径积分统一为 `Li * f * cos / pdf`
+- GGX 微表面镜面项，包含 Schlick Fresnel 和 Smith 遮蔽项
+- 支持 `baseColor / roughness / metallic / normal` 贴图驱动
+- 三角形切线空间 `TBN` 构建与 tangent-space normal map
+- 支持 `OpenGL / DirectX` 法线贴图约定切换
+- 输入颜色空间区分：
+  - `baseColor`：`sRGB -> linear`
+  - `roughness / metallic / normal`：线性数据
+- 输出显示链路：
   - Reinhard tone mapping
-  - `linear -> sRGB` encoding
-- GGX VNDF sampling
-- Light / BSDF MIS with power heuristic
-- OBJ/MTL auto-material mapping into `PBR_Material`
+  - `linear -> sRGB` 编码
+- GGX VNDF 采样
+- 基于 power heuristic 的 light / BSDF MIS
+- OBJ/MTL 自动映射到 `PBR_Material`
 
-### Current Limits
+### 当前限制
 
-The renderer is now past the “PBR skeleton” stage, but it is still not a full production pipeline. Current gaps include:
+项目已经不是“PBR 雏形”，但仍然不是完整生产级流程。当前还缺少：
 
-- No IBL / HDRI environment lighting yet
-- No environment importance sampling yet
-- No clearcoat / anisotropy / subsurface / sheen layers
-- No adaptive light-vs-BSDF strategy selection yet
-- No EXR/HDR output path yet
+- IBL / HDRI 环境光照
+- 环境贴图 importance sampling
+- clearcoat、anisotropy、subsurface、sheen 等更复杂材质层
+- 自适应的 light / BSDF strategy 选择
+- EXR / HDR 输出链路
 
-## Scene Entry Points
+## 场景入口
 
-Scene selection is controlled in [`D:\Computer Graphics\PathTracer\PathTracer-CPP\Renderer.cpp`](D:/Computer%20Graphics/PathTracer/PathTracer-CPP/Renderer.cpp) through the `switch` in `main()`.
+场景入口位于 [D:\Computer Graphics\PathTracer\PathTracer-CPP\Renderer.cpp](D:/Computer%20Graphics/PathTracer/PathTracer-CPP/Renderer.cpp)，通过 `main()` 中的 `switch` 选择：
 
-Available entries:
+- `1`：Bouncing Spheres
+- `2`：Checker Spheres
+- `3`：Earth
+- `4`：Perlin Spheres
+- `5`：Quads
+- `6`：Lights Test
+- `7`：Cornell Box
+- `8`：Cornell Smoke
+- `9`：Chapter Two Final Scene
+- `10`：Triangle Test
+- `11`：ObjTest
+- `12`：Teapot
+- `13`：Sponza
+- `14`：PBR Test
+- `15`：PBR Benchmark
+- `16`：PBR Normal Map Test
+- `17`：Obj PBR Test
 
-- `1`: Bouncing Spheres
-- `2`: Checker Spheres
-- `3`: Earth
-- `4`: Perlin Spheres
-- `5`: Quads
-- `6`: Lights Test
-- `7`: Cornell Box
-- `8`: Cornell Smoke
-- `9`: Chapter Two Final Scene
-- `10`: Triangle Test
-- `11`: ObjTest
-- `12`: Teapot
-- `13`: Sponza
-- `14`: PBR Test
-- `15`: PBR Benchmark
-- `16`: PBR Normal Map Test
-- `17`: Obj PBR Test
-
-## PBR Validation Scenes
+## PBR 验证场景
 
 ### `PBR_Test()`
 
-Minimal PBR validation scene used to inspect metallic-roughness behavior under controlled lighting.
+最小 PBR 校验场景，用于检查 metallic-roughness 工作流在受控光照下的行为。
 
-Purpose:
+主要目的：
 
-- verify GGX response under area lights
-- verify roughness / metallic behavior
-- check VNDF + MIS stability after material-side sampling changes
+- 验证 GGX 在面积光下的响应
+- 验证 roughness / metallic 对材质表现的影响
+- 检查 VNDF + MIS 接入后的稳定性
 
 ### `PBR_Normal_Map_Test()`
 
-Tangent-space normal mapping validation scene used to compare:
+法线贴图校验场景，用于对比：
 
-- PBR material with normal map
-- PBR material without normal map
+- 带 normal map 的 PBR 材质
+- 不带 normal map 的 PBR 材质
 
-Purpose:
+主要目的：
 
-- verify TBN correctness
-- verify normal map convention handling
-- confirm that `Eval()`, `PDF()`, and camera-side `cos_theta` use a consistent shading normal
+- 验证 TBN 构建是否正确
+- 验证 OpenGL / DirectX 法线贴图约定切换
+- 验证 `Eval()`、`PDF()` 和 `Camera` 中 `cos_theta` 使用同一条着色法线
 
 ### `Obj_PBR_Test()`
 
-Automatic asset-loading validation scene.
+自动资产加载校验场景。
 
-Purpose:
+主要目的：
 
-- verify `OBJ -> MTL -> Texture -> PBR_Material`
-- verify auto-mapping of:
+- 验证 `OBJ -> MTL -> Texture -> PBR_Material`
+- 验证下列字段的自动映射：
   - `map_Kd`
   - `norm`
   - `map_Pr`
   - `map_Pm`
-- verify color-space handling and normal mapping on real loaded assets
+- 验证真实资产上的颜色空间与法线贴图接入链路
 
 ## Benchmark
 
-`PBR_Benchmark()` reuses the PBR validation scene and compares serial and parallel tiled rendering.
+`PBR_Benchmark()` 复用 PBR 校验场景，对串行和并行 tile 渲染做对比。
 
-Benchmark setup:
+测试环境：
 
-- CPU: `Intel Core Ultra 9 275HX`
-- Scene: `PBR validation`
-- Resolution: `800x450`
-- Samples per pixel: `400`
-- Max depth: `20`
+- CPU：`Intel Core Ultra 9 275HX`
+- 场景：`PBR validation`
+- 分辨率：`800x450`
+- 每像素采样：`400`
+- 最大深度：`20`
 
-Measured result:
+实测结果：
 
-- Serial: `65.3296 s`
-- Parallel: `29.9941 s`
-- Speedup: `2.17808x`
-- Time reduced: `54.0881%`
+- Serial：`65.3296 s`
+- Parallel：`29.9941 s`
+- Speedup：`2.17808x`
+- Time reduced：`54.0881%`
 
-## Project Structure
+## 项目结构
 
 ```text
 PathTracer/
@@ -154,55 +153,55 @@ PathTracer/
    └─ PathTracer-CPP.vcxproj
 ```
 
-## Build and Run
+## 构建与运行
 
-### Requirements
+### 环境要求
 
 - Windows
 - Visual Studio 2022
 - MSVC
 - C++20
 
-### Build
+### 构建方式
 
-Open one of the project files:
+可直接打开以下工程文件：
 
 - `PathTracer-CPP/PathTracer-CPP.vcxproj`
 - `PathTracer-CPP/PathTracer-CPP.slnx`
 
-Recommended configuration:
+推荐配置：
 
-1. `x64`
-2. `Release` for final rendering
-3. `Debug` for feature debugging
+1. 使用 `x64`
+2. `Release` 用于正式渲染
+3. `Debug` 用于调试和功能验证
 
-### Output
+### 输出说明
 
-- Render result is written to the file specified by `Camera::output_filename`
-- Console shows progress and total render time
-- A preview window is opened during rendering
+- 渲染结果会写入 `Camera::output_filename` 指定的文件
+- 控制台会输出进度和总渲染时间
+- 渲染过程中会弹出实时预览窗口
 
-## Asset and Texture Notes
+## 资源与纹理说明
 
-Image textures are loaded through `rtw_stb_image.h`. Search order typically includes:
+图像纹理通过 `rtw_stb_image.h` 加载，常见搜索路径包括：
 
-- current working directory
+- 当前工作目录
 - `PathTracer-CPP/images/`
-- the directory pointed to by `RTW_IMAGES`
+- 环境变量 `RTW_IMAGES` 指定目录
 
-OBJ loading resolves `.mtl` and referenced textures relative to the OBJ directory first.
+OBJ 加载时会优先在模型目录内查找 `.mtl` 与关联贴图。
 
-## Next Steps
+## 后续计划
 
-The next planned phase is environment lighting:
+下一阶段计划聚焦环境光照：
 
-1. HDRI / lat-long environment texture support
-2. Miss-radiance environment sampling in `Camera`
-3. IBL validation scene
-4. Environment importance sampling
+1. HDRI / 经纬度环境贴图支持
+2. `Camera` miss 分支环境辐射返回
+3. `PBR_IBL_Test()` 场景
+4. 环境贴图 importance sampling
 
-After that:
+之后再继续推进：
 
-- adaptive light-vs-BSDF strategy selection
-- more advanced material lobes
-- higher-quality output formats
+- 自适应 light / BSDF 采样策略
+- 更复杂的材质层
+- 更高质量的输出格式
