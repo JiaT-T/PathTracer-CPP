@@ -207,11 +207,12 @@ public :
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const double specular_weight = compute_specular_weight(metallic);
 		const double diffuse_weight = 1.0 - specular_weight;
-		const Vector3 n = sample_shading_normal(rec);
+		const Vector3 view_dir = normalize(-ray_in.direction());
+		const Vector3 n = corrected_shading_normal(rec, view_dir);
 
 		s_rec.attenuation = Color(1.0, 1.0, 1.0);
 		auto diffuse_pdf = std::make_shared<Cosine_PDF>(n);
-		auto specular_pdf = std::make_shared<GGX_PDF>(n, normalize(-ray_in.direction()), roughness);
+		auto specular_pdf = std::make_shared<GGX_PDF>(n, view_dir, roughness);
 
 		s_rec.p_pdf = std::make_shared<Mixture_PDF>(diffuse_pdf, specular_pdf, diffuse_weight);
 		s_rec.skip_pdf = false;
@@ -220,13 +221,15 @@ public :
 
 	Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
 	{
-		const Vector3 n = sample_shading_normal(rec);
 		const Vector3 v = normalize(-ray_in.direction());
 		const Vector3 l = normalize(scattered.direction());
-		const double n_dot_l = std::max(dot(n, l), 0.0);
-		const double n_dot_v = std::max(dot(n, v), 0.0);
-		if (n_dot_l <= 0.0 || n_dot_v <= 0.0)
+		const Vector3 n = corrected_shading_normal(rec, v);
+		const double g_dot_l = std::max(dot(rec.n, l), 0.0);
+		const double g_dot_v = std::max(dot(rec.n, v), 0.0);
+		if (g_dot_l <= 0.0 || g_dot_v <= 0.0)
 			return Color(0, 0, 0);
+		const double n_dot_l = std::max(dot(n, l), 1e-4);
+		const double n_dot_v = std::max(dot(n, v), 1e-4);
 
 		const Color base_color = sample_color(base_tex, rec);
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
@@ -247,7 +250,7 @@ public :
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const double specular_weight = compute_specular_weight(metallic);
 		const double diffuse_weight = 1.0 - specular_weight;
-		const Vector3 n = sample_shading_normal(rec);
+		const Vector3 n = corrected_shading_normal(rec, normalize(-ray_in.direction()));
 		const Cosine_PDF diffuse_pdf(n);
 		const GGX_PDF specular_pdf(n, normalize(-ray_in.direction()), roughness);
 
@@ -357,9 +360,16 @@ private:
 		if (T.length_squared() < 1e-10) return rec.n;
 		T = normalize(T);
 
-		Vector3 B = cross(N, T);
+		Vector3 B = rec.bitangent - dot(rec.bitangent, N) * N - dot(rec.bitangent, T) * T;
+		if (B.length_squared() < 1e-10)
+		{
+			const double handedness = dot(cross(N, T), rec.bitangent) < 0.0 ? -1.0 : 1.0;
+			B = handedness * cross(N, T);
+		}
 		if (B.length_squared() < 1e-10) return rec.n;
 		B = normalize(B);
+		if (dot(cross(N, T), B) < 0.0)
+			B = -B;
 
 		// Normal in world space
 		Vector3 n_ws = normalize(
@@ -372,6 +382,27 @@ private:
 			n_ws = -n_ws;
 
 		return n_ws;
+	}
+
+	static Vector3 correct_shading_normal_to_direction(const Vector3& shading_normal, const Vector3& geometric_normal, const Vector3& direction)
+	{
+		const double geom_dot = dot(geometric_normal, direction);
+		const double shade_dot = dot(shading_normal, direction);
+		if (geom_dot <= 0.0 || shade_dot > 0.0)
+			return shading_normal;
+
+		const double t = std::clamp(geom_dot / (geom_dot - shade_dot + 1e-6), 0.0, 1.0);
+		Vector3 corrected = normalize((1.0 - 0.999 * t) * geometric_normal + (0.999 * t) * shading_normal);
+		if (dot(corrected, geometric_normal) < 0.0)
+			corrected = -corrected;
+		return corrected;
+	}
+
+	Vector3 corrected_shading_normal(const HitRecord& rec, const Vector3& view_dir) const
+	{
+		Vector3 n = sample_shading_normal(rec);
+		n = correct_shading_normal_to_direction(n, rec.geo_n, view_dir);
+		return n;
 	}
 
 	static double compute_specular_weight(double metallic)

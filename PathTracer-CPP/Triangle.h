@@ -206,9 +206,9 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	rec.v = w * uv0.y + u * uv1.y + v * uv2.y;
 
 	rec.mat = mat;
-	rec.set_face_front(ray, shading_normal);
-
-	rec.geo_n = face_normal;
+	rec.front_face = dot(ray.direction(), face_normal) < 0;
+	rec.geo_n = rec.front_face ? face_normal : -face_normal;
+	rec.n = rec.front_face ? shading_normal : -shading_normal;
 	rec.tangent = tangent;
 	rec.bitangent = bitangent;
 	rec.has_tangent_space = has_tangent_space;

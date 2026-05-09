@@ -13,6 +13,7 @@
 #include "Material.h"
 #include "PDF.h"
 #include "PPMPreviewWindow.h"
+#include "Environment.h"
 
 static double power_heuristic(double pdf_a, double pdf_b)
 {
@@ -52,6 +53,11 @@ public :
 	{
 		int height = static_cast<int>(image_width / aspect_ratio);
 		return (height < 1) ? 1 : height;
+	}
+
+	void SetEnvironment(std::shared_ptr<Environment> env)
+	{
+		environment = std::move(env);
 	}
 
 	// Ver.1
@@ -300,6 +306,8 @@ private :
 	Vector3   defocus_disk_u;   // Defocus disk horizontal radius
 	Vector3   defocus_disk_v;   // Defocus disk vertical radius
 
+	std::shared_ptr<Environment> environment = nullptr;
+
 	void initialize()
 	{
 		image_height = static_cast<int>(image_width / aspect_ratio);
@@ -386,7 +394,7 @@ private :
 
 		HitRecord rec;
 		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return background;
+			return miss_radiance(ray);
 
 		Scattered_Record s_rec{};
 		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
@@ -405,8 +413,7 @@ private :
 			return emitted_color;
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const Vector3 shading_normal = rec.mat->ShadingNormal(rec);
-		const double cos_theta = std::max(dot(shading_normal, normalize(scattered.direction())), 0.0);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
 		const Color sample_color = ray_color(scattered, depth - 1, world);
 		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / pdf_value;
 
@@ -421,7 +428,7 @@ private :
 
 		HitRecord rec;
 		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return background;
+			return miss_radiance(ray);
 
 		Scattered_Record s_rec{};
 		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
@@ -470,8 +477,7 @@ private :
 			return emitted_color;
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const Vector3 shading_normal = rec.mat->ShadingNormal(rec);
-		const double cos_theta = std::max(dot(shading_normal, normalize(scattered.direction())), 0.0);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
 		if (cos_theta <= 0.0)
 			return emitted_color;
 
@@ -498,5 +504,12 @@ private :
 
 
 		return emitted_color + scattered_color;
+	}
+
+	Color miss_radiance(const Ray& ray) const
+	{
+		if (environment)
+			return environment->radiance(ray.direction());
+		return background;
 	}
 };

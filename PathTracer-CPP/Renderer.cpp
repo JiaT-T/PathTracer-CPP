@@ -31,6 +31,7 @@ void PBR_Test();
 void Obj_PBR_Test();
 void PBR_Benchmark();
 void PBR_Normal_Map_Test();
+void PBR_IBL_Test();
 
 void RenderAndPreview(Camera& cam, const Hittable& world)
 {
@@ -53,7 +54,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (17)
+	switch (18)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -72,6 +73,7 @@ int main()
 		case 15:  PBR_Benchmark();                          break;
 		case 16:  PBR_Normal_Map_Test();                    break;
 		case 17:  Obj_PBR_Test();                           break;
+		case 18:  PBR_IBL_Test();                           break;
 	}
 }
 
@@ -992,4 +994,55 @@ void Obj_PBR_Test()
 
 	std::clog << "Start rendering automatic OBJ PBR test scene...\n";
 	RenderAndPreview(cam, world, lights);
+}
+
+void PBR_IBL_Test()
+{
+	Hittable_List world;
+
+	auto ground_mat = std::make_shared<Lambertian>(Color(0.55, 0.55, 0.55));
+	world.add(std::make_shared<Quad>(
+		Point3(-12.0, -1.0, -12.0),
+		Vector3(24.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 24.0),
+		ground_mat));
+
+	auto ornament_pbr = std::make_shared<PBR_Material>(
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_Color.jpg",
+			color_space::SRGB),
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_NormalGL.jpg",
+			color_space::Linear),
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_Roughness.jpg",
+			color_space::Linear),
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_Metalness.jpg",
+			color_space::Linear));
+
+	world.add(std::make_shared<Sphere>(Point3(0.0, 0.65, 0.0), 1.65, ornament_pbr));
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 960;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 20;
+	cam.vfov = 28;
+	cam.lookfrom = Point3(0.0, 1.8, 6.5);
+	cam.lookat = Point3(0.0, 0.9, 0.0);
+	cam.up = Vector3(0, 1, 0);
+	cam.defocus_angle = 0;
+	cam.background = Color(0.02, 0.02, 0.02);
+	cam.output_filename = "pbr_ibl_test.ppm";
+	cam.SetEnvironment(std::make_shared<LatLong_Environment>(
+		"images/HDR/suburban_garden_2k.hdr",
+		1.5,
+		0.0,
+		false));
+
+	std::clog << "Start rendering PBR IBL test scene...\n";
+	RenderAndPreview(cam, world);
 }

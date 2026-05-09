@@ -10,6 +10,7 @@
 #endif
 
 #include "external/stb_image.h"
+#include "Color.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -74,8 +75,10 @@ public:
 
     int width()  const { return (fdata == nullptr) ? 0 : image_width; }
     int height() const { return (fdata == nullptr) ? 0 : image_height; }
+    bool is_valid() const { return fdata != nullptr && image_width > 0 && image_height > 0; }
 
-    const unsigned char* pixel_data(int x, int y) const {
+    const unsigned char* pixel_data(int x, int y) const
+    {
         static const unsigned char magenta[] = { 255, 0, 255 };
         if (bdata.empty()) return magenta;
 
@@ -83,6 +86,25 @@ public:
         y = std::clamp(y, 0, image_height - 1);
 
         return bdata.data() + y * bytes_per_scanline + x * bytes_per_pixel;
+    }
+
+    const float* float_pixel_data(int x, int y) const
+    {
+        if (!is_valid())
+            return nullptr;
+
+        x = std::clamp(x, 0, image_width - 1);
+        y = std::clamp(y, 0, image_height - 1);
+
+        return fdata.get() + (y * image_width + x) * bytes_per_pixel;
+    }
+
+    Color float_pixel(int x, int y) const
+    {
+        const float* pixel = float_pixel_data(x, y);
+        if (pixel == nullptr)
+			return Color(1.0, 0.0, 1.0);
+		return Color(pixel[0], pixel[1], pixel[2]);
     }
 
 private:
@@ -117,6 +139,7 @@ private:
             *bptr = float_to_byte(*fptr);
         }
     }
+
 };
 
 // Restore MSVC compiler warnings
