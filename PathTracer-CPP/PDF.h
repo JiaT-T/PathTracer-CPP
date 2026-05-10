@@ -3,6 +3,7 @@
 #include<array>
 #include "ONB.h"
 #include "Hittable.h"
+#include "Environment.h"
 
 class PDF
 {
@@ -235,3 +236,22 @@ private:
 	double roughness;
 	double alpha;
 };
+
+class Environment_PDF : public PDF
+{
+public :
+	Environment_PDF(const Environment& env) : env(env) {}
+
+	double value(const Vector3& dir) const override
+	{
+		return env.pdf_value(dir);
+	}
+
+	Vector3 generate() const override
+	{
+		return env.random();
+	}
+
+private :
+	const Environment& env;
+}
