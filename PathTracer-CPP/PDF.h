@@ -240,7 +240,7 @@ private:
 class Environment_PDF : public PDF
 {
 public :
-	Environment_PDF(const Environment& env) : env(env) {}
+	explicit Environment_PDF(const Environment& env) : env(env) {}
 
 	double value(const Vector3& dir) const override
 	{
@@ -254,4 +254,4 @@ public :
 
 private :
 	const Environment& env;
-}
+};

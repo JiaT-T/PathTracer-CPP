@@ -109,7 +109,7 @@ private :
 		int y_end = 0;
 	};
 
-	static constexpr int kTileSize = 16;
+	static constexpr int kTileSize = 4;
 
 	template <typename PixelShader>
 	void render_impl(PixelShader&& pixel_shader, PPMPreviewWindow* preview)
@@ -441,10 +441,13 @@ private :
 			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights);
 		}
 
-		auto p_light = std::make_shared<Hittable_PDF>(lights, rec.p);
+		auto p_light = build_light_pdf(lights, rec.p);
 
-		const double light_choose_prob = 0.5;
-		const double bsdf_choose_prob = 0.5;
+		// Calculate the probability of choosing BSDF sampling 
+		// and light sampling based on the material's preference
+		const double bsdf_choose_prob = rec.mat->BSDFSamplingPreference(ray, rec);
+		const double light_choose_prob = 1.0 - bsdf_choose_prob;
+
 		bool sample_light = random_double() < light_choose_prob;
 		double mis_weight = 0.0, choose_prob = 0.0, strategy_pdf = 0.0;
 		Ray scattered;
@@ -511,5 +514,17 @@ private :
 		if (environment)
 			return environment->radiance(ray.direction());
 		return background;
+	}
+
+	std::shared_ptr<PDF> build_light_pdf(const Hittable& lights, const Point3& origin) const
+	{
+		auto p_geo = std::make_shared<Hittable_PDF>(lights, origin);
+
+		if (!environment)
+			return p_geo;
+
+		auto p_env = std::make_shared<Environment_PDF>(*environment);
+
+		return std::make_shared<Mixture_PDF>(p_geo, p_env, 0.7);
 	}
 };

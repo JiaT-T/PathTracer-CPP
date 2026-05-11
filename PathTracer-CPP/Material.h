@@ -26,6 +26,11 @@ public:
 	virtual Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return Color(0, 0, 0); }
 	virtual double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
 	virtual Vector3 ShadingNormal(const HitRecord& rec) const { return rec.n; }
+
+	// 0.0 : Only prefer light sampling
+	// 0.5 : No preference
+	// 1.0 : Only prefer BSDF sampling
+	virtual double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const { return 0.5; }
 };
 
 
@@ -286,6 +291,21 @@ public :
 		double denominator = 4.0 * n_dot_v * n_dot_l + 0.0001;
 
 		return numerator / denominator;
+	}
+
+	double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const override
+	{
+		const double roughness = sample_scalar(roughness_tex, rec, 0.5, 0.05, 1.0);
+		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
+
+		const double specular_weight = compute_specular_weight(metallic);
+		const double gloss_factor = 1.0 - roughness;
+
+		// Not a strict formula
+		// but a heuristic which thinks metals and glossy surfaces should prefer BSDF sampling more than diffuse surfaces
+		const double preference = 0.15 + 0.55 * specular_weight + 0.20 * gloss_factor;
+
+		return std::clamp(preference, 0.1, 0.9);
 	}
 
 private:

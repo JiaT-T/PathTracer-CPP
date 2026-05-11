@@ -999,6 +999,7 @@ void Obj_PBR_Test()
 void PBR_IBL_Test()
 {
 	Hittable_List world;
+	Hittable_List lights;
 
 	auto ground_mat = std::make_shared<Lambertian>(Color(0.55, 0.55, 0.55));
 	world.add(std::make_shared<Quad>(
@@ -1023,6 +1024,15 @@ void PBR_IBL_Test()
 
 	world.add(std::make_shared<Sphere>(Point3(0.0, 0.65, 0.0), 1.65, ornament_pbr));
 
+	auto area_light_mat = std::make_shared<Diffuse_Light>(Color(14.0, 14.0, 14.0));
+	auto area_light = std::make_shared<Quad>(
+		Point3(-8.6, 10.0, 2.4),
+		Vector3(3.2, 0.0, 0.0),
+		Vector3(0.0, 0.0, 3.2),
+		area_light_mat);
+	world.add(area_light);
+	lights.add(area_light);
+
 	world = Hittable_List(std::make_shared<BVH_Node>(world));
 
 	Camera cam;
@@ -1043,6 +1053,6 @@ void PBR_IBL_Test()
 		0.0,
 		false));
 
-	std::clog << "Start rendering PBR IBL test scene...\n";
-	RenderAndPreview(cam, world);
+	std::clog << "Start rendering PBR IBL + area light test scene...\n";
+	RenderAndPreview(cam, world, lights);
 }
