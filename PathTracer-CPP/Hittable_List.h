@@ -61,6 +61,15 @@ public :
 		return objects[random_int(0, size - 1)]->random(origin);
 	}
 
+	// The sum of the power of the light emitted from each object in the list
+	double sampling_power_estimate() const override
+	{
+		double sum = 0.0;
+		for (const auto& object : objects)
+			sum += object->sampling_power_estimate();
+		return sum;
+	}
+
 private :
 	AABB bbox;
 };

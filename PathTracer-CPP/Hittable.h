@@ -34,6 +34,9 @@ public :
 	virtual AABB bounding_box() const = 0;
 	virtual double pdf_value(const Point3& origin, const Vector3& direction) const { return 0.0; }
 	virtual Vector3 random(const Point3& origin) const { return Vector3(1.0, 0.0, 0.0); } 
+	// Returns the estimated power of the light emitted from the hittable, 
+	// which is used for importance sampling of light sources
+	virtual double sampling_power_estimate() const { return 0.0; }
 };
 
 class Translation : public Hittable

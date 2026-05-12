@@ -31,6 +31,12 @@ public:
 	// 0.5 : No preference
 	// 1.0 : Only prefer BSDF sampling
 	virtual double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const { return 0.5; }
+
+	// Returns "How much light is emitted from the material at the given point (u, v, p)".
+	virtual double EmissionLuninance(double u, double v, const Point3& p) const
+	{
+		return 0.0;
+	}
 };
 
 
@@ -147,6 +153,13 @@ public :
 	{
 		if (!rec.front_face) return Color(0, 0, 0);
 		return tex->value(u, v, p);
+	}
+
+	double EmissionLuninance(double u, double v, const Point3& p) const override
+	{
+		const Color c = tex->value(u, v, p);
+		// Returns a constant brightness instead of RGB
+		return 0.2126 * c.x() + 0.7152 * c.y() + 0.0722 * c.z();
 	}
 
 private :

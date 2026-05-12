@@ -17,6 +17,7 @@ public:
 	virtual Color radiance(const Vector3& dir) const = 0;
 	virtual double pdf_value(const Vector3& dir) const = 0;
 	virtual Vector3 random() const = 0;
+	virtual double sampling_power_estimate() const = 0;
 };
 
 class LatLong_Environment : public Environment
@@ -87,6 +88,12 @@ public:
 		const double v = (static_cast<int>(y) + random_double()) / static_cast<double>(height);
 
 		return uv_to_direction(u, v);
+	}
+
+	// Average brightness of env * the area of sphere
+	double sampling_power_estimate() const override
+	{
+		return intensity * total_weight;
 	}
 
 private:
