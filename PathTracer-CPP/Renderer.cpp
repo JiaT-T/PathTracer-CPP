@@ -1071,9 +1071,9 @@ void README_Showcase()
 		Vector3(0.0, 0.0, 28.0),
 		ground_mat));
 
-	// Reuse the same sphere primitive as the IBL validation scene and spread the
-	// material variety across the spheres so the README image shows the renderer's
-	// current visible feature set in one composition.
+	// Reuse the same sphere primitive as the IBL validation scene and lay the
+	// spheres out in two readable rows so each feature remains visible in the
+	// final README shot.
 	auto metal1_pbr = std::make_shared<PBR_Material>(
 		std::make_shared<Image_Texture>(
 			"images/Metal1/Metal049A_2K-JPG_Color.jpg",
@@ -1108,16 +1108,19 @@ void README_Showcase()
 	auto glass_mat = std::make_shared<Dielectric>(1.5);
 	auto classic_metal = std::make_shared<Metal>(Color(0.88, 0.90, 0.94), 0.08);
 
-	world.add(std::make_shared<Sphere>(Point3(0.0, 0.55, 0.85), 1.55, metal1_pbr));
-	world.add(std::make_shared<Sphere>(Point3(2.95, -0.08, 0.75), 0.92, gold_pbr));
-	world.add(std::make_shared<Sphere>(Point3(-2.55, -0.08, 0.95), 0.92, glass_mat));
-	world.add(std::make_shared<Sphere>(Point3(-4.6, -0.20, -1.7), 0.80, earth_mat));
-	world.add(std::make_shared<Sphere>(Point3(4.65, -0.12, -1.55), 0.88, noise_mat));
-	world.add(std::make_shared<Sphere>(Point3(0.2, -0.28, -3.2), 0.72, classic_metal));
+	// Front row: the main PBR, dielectric, and colored-metal reads.
+	world.add(std::make_shared<Sphere>(Point3(-3.4, -0.02, 1.0), 0.98, glass_mat));
+	world.add(std::make_shared<Sphere>(Point3(0.0, 0.18, 0.8), 1.18, metal1_pbr));
+	world.add(std::make_shared<Sphere>(Point3(3.4, -0.02, 1.0), 0.98, gold_pbr));
 
-	// Keep one participating-medium sphere in the background so the scene still
-	// exposes the volumetric path without fighting for the main composition.
-	auto fog_boundary = std::make_shared<Sphere>(Point3(2.35, 0.08, -2.65), 1.05, glass_mat);
+	// Back row: image texture, classic metal, procedural noise, and volume.
+	world.add(std::make_shared<Sphere>(Point3(-5.3, -0.14, -2.0), 0.86, earth_mat));
+	world.add(std::make_shared<Sphere>(Point3(-1.8, -0.14, -2.45), 0.82, classic_metal));
+	world.add(std::make_shared<Sphere>(Point3(1.8, -0.12, -2.35), 0.86, noise_mat));
+
+	// Keep one participating-medium sphere in the back row so the scene still
+	// shows the volume path while remaining visually separated from the glass ball.
+	auto fog_boundary = std::make_shared<Sphere>(Point3(5.3, -0.10, -2.1), 0.90, glass_mat);
 	world.add(fog_boundary);
 	world.add(std::make_shared<Constant_Medium>(fog_boundary, 0.17, Color(0.22, 0.42, 0.88)));
 
@@ -1125,9 +1128,9 @@ void README_Showcase()
 	// instead of relying on HDRI highlights alone.
 	auto area_light_mat = std::make_shared<Diffuse_Light>(Color(16.0, 15.0, 14.0));
 	auto area_light = std::make_shared<Quad>(
-		Point3(-3.0, 5.8, 1.8),
-		Vector3(6.0, 0.0, 0.0),
-		Vector3(0.0, 0.0, 4.2),
+		Point3(-4.0, 6.0, 2.8),
+		Vector3(8.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 3.8),
 		area_light_mat);
 	world.add(area_light);
 	lights.add(area_light);
@@ -1137,14 +1140,14 @@ void README_Showcase()
 	Camera cam;
 	cam.aspect_ratio = 16.0 / 9.0;
 	cam.image_width = 1280;
-	cam.sample_per_pixel = 400;
+	cam.sample_per_pixel = 700;
 	cam.max_depth = 25;
-	cam.vfov = 24;
-	cam.lookfrom = Point3(0.35, 1.95, 10.2);
-	cam.lookat = Point3(0.15, 0.65, 0.15);
+	cam.vfov = 27;
+	cam.lookfrom = Point3(0.0, 1.55, 12.3);
+	cam.lookat = Point3(0.0, 0.35, -0.55);
 	cam.up = Vector3(0, 1, 0);
-	cam.focus_dist = 10.0;
-	cam.defocus_angle = 0.35;
+	cam.focus_dist = 12.0;
+	cam.defocus_angle = 0.18;
 	cam.background = Color(0.02, 0.02, 0.02);
 	cam.output_filename = "readme_showcase.ppm";
 	cam.SetEnvironment(std::make_shared<LatLong_Environment>(
