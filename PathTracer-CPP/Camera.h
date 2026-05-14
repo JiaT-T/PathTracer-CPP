@@ -13,6 +13,7 @@
 #include "Material.h"
 #include "PDF.h"
 #include "PPMPreviewWindow.h"
+#include "Environment.h"
 
 static double power_heuristic(double pdf_a, double pdf_b)
 {
@@ -20,6 +21,13 @@ static double power_heuristic(double pdf_a, double pdf_b)
 	double b2 = pdf_b * pdf_b;
 	double denom = a2 + b2;
 	return a2 <= 0.0 ? 0.0 : a2 / denom;
+}
+
+static double power_heuristic(double pdf_a, int sample_count_a, double pdf_b, int sample_count_b)
+{
+	const double weighted_a = sample_count_a * pdf_a;
+	const double weighted_b = sample_count_b * pdf_b;
+	return power_heuristic(weighted_a, weighted_b);
 }
 
 class Camera
@@ -52,6 +60,11 @@ public :
 	{
 		int height = static_cast<int>(image_width / aspect_ratio);
 		return (height < 1) ? 1 : height;
+	}
+
+	void SetEnvironment(std::shared_ptr<Environment> env)
+	{
+		environment = std::move(env);
 	}
 
 	// Ver.1
@@ -103,7 +116,7 @@ private :
 		int y_end = 0;
 	};
 
-	static constexpr int kTileSize = 16;
+	static constexpr int kTileSize = 4;
 
 	template <typename PixelShader>
 	void render_impl(PixelShader&& pixel_shader, PPMPreviewWindow* preview)
@@ -300,6 +313,8 @@ private :
 	Vector3   defocus_disk_u;   // Defocus disk horizontal radius
 	Vector3   defocus_disk_v;   // Defocus disk vertical radius
 
+	std::shared_ptr<Environment> environment = nullptr;
+
 	void initialize()
 	{
 		image_height = static_cast<int>(image_width / aspect_ratio);
@@ -381,22 +396,66 @@ private :
 	// Ver.1
 	Color ray_color(const Ray& ray, const int depth, const Hittable& world)
 	{
+		return ray_color(ray, depth, world, true);
+	}
+
+	// Ver.2
+	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights)
+	{
+		return ray_color(ray, depth, world, lights, true);
+	}
+
+	int first_bounce_samples = 4;
+
+	Color miss_radiance(const Ray& ray) const
+	{
+		if (environment)
+			return environment->radiance(ray.direction());
+		return background;
+	}
+
+	// Build a PDF for sampling light sources automatically,
+	// which can be a mixture of geometry-based sampling and environment-based sampling
+	std::shared_ptr<PDF> build_light_pdf(const Hittable& lights, const Point3& origin) const
+	{
+		auto p_geo = std::make_shared<Hittable_PDF>(lights, origin);
+
+		if (!environment)
+			return p_geo;
+
+		auto p_env = std::make_shared<Environment_PDF>(*environment);
+
+		const double env_power = environment->sampling_power_estimate();
+		const double geo_power = lights.sampling_power_estimate();
+
+		const double sum = env_power + geo_power;
+		double weight_geo = (sum > 0.0) ? (geo_power / sum) : 0.5;
+		weight_geo = std::clamp(weight_geo, 0.05, 0.95);
+
+		return std::make_shared<Mixture_PDF>(p_geo, p_env, weight_geo);
+	}
+
+	// Suppress immediate emission / environment when the caller already handles direct lighting explicitly.
+	Color ray_color(const Ray& ray, const int depth, const Hittable& world, bool allow_emission)
+	{
 		if (depth <= 0)
 			return Color(0, 0, 0);
 
 		HitRecord rec;
 		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return background;
+			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
 
 		Scattered_Record s_rec{};
-		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
+		const Color emitted_color =
+			allow_emission ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p)
+			: Color(0, 0, 0);
 
 		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
 		if (s_rec.skip_pdf)
 		{
-			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world);
+			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, true);
 		}
 
 		Ray scattered(rec.p, s_rec.p_pdf->generate(), ray.time());
@@ -405,98 +464,200 @@ private :
 			return emitted_color;
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const Vector3 shading_normal = rec.mat->ShadingNormal(rec);
-		const double cos_theta = std::max(dot(shading_normal, normalize(scattered.direction())), 0.0);
-		const Color sample_color = ray_color(scattered, depth - 1, world);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const Color sample_color = ray_color(scattered, depth - 1, world, true);
 		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / pdf_value;
 
 		return emitted_color + scattered_color;
 	}
 
-	// Ver.2
-	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights)
+	// Suppress immediate emission / environment when the caller already handles direct lighting explicitly.
+	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights, bool allow_emission)
 	{
 		if (depth <= 0)
 			return Color(0, 0, 0);
 
 		HitRecord rec;
 		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return background;
+			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
 
 		Scattered_Record s_rec{};
-		Color emitted_color = rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p);
+		const Color emitted_color =
+			allow_emission ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p)
+			: Color(0, 0, 0);
 
 		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
 		if (s_rec.skip_pdf)
 		{
-			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights);
+			// Delta paths cannot use explicit direct-light sampling, so keep emission enabled.
+			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights, true);
 		}
 
-		auto p_light = std::make_shared<Hittable_PDF>(lights, rec.p);
+		auto p_light = build_light_pdf(lights, rec.p);
 
-		const double light_choose_prob = 0.5;
-		const double bsdf_choose_prob = 0.5;
-		bool sample_light = random_double() < light_choose_prob;
-		double mis_weight = 0.0, choose_prob = 0.0, strategy_pdf = 0.0;
-		Ray scattered;
-		if (sample_light)
+		const int bounce = max_depth - depth;
+		const int light_direct_sample_count = (bounce == 0) ? first_bounce_samples : 1;
+		const int bsdf_direct_sample_count = 1;
+
+		// Spend extra first-bounce budget on explicit light samples instead of duplicating full recursion.
+		Color light_direct_sum(0, 0, 0);
+		for (int i = 0; i < light_direct_sample_count; ++i)
 		{
-			// Sample a ray from the light source
-			Vector3 dir = p_light->generate();
-			scattered = Ray(rec.p, dir, ray.time());
-			strategy_pdf = p_light->value(dir);
-			choose_prob = light_choose_prob;
-			double light_pdf_val = p_light->value(scattered.direction());
-			double bsdf_pdf_val = s_rec.p_pdf->value(scattered.direction());
-
-			mis_weight = power_heuristic(light_pdf_val, bsdf_pdf_val);
+			light_direct_sum += sample_direct_light_once(
+				ray,
+				rec,
+				s_rec,
+				world,
+				p_light,
+				light_direct_sample_count,
+				bsdf_direct_sample_count);
 		}
-		else
+
+		// Keep one BSDF-side direct sample so sharp glossy lobes still have a matching strategy.
+		Color bsdf_direct_sum(0, 0, 0);
+		for (int i = 0; i < bsdf_direct_sample_count; ++i)
 		{
-			// Sample a ray from the BSDF
-			Vector3 dir = s_rec.p_pdf->generate();
-			scattered = Ray(rec.p, dir, ray.time());
-			strategy_pdf = s_rec.p_pdf->value(dir);
-			choose_prob = bsdf_choose_prob;
-			double light_pdf_val = p_light->value(scattered.direction());
-			double bsdf_pdf_val = s_rec.p_pdf->value(scattered.direction());
-
-			mis_weight = power_heuristic(bsdf_pdf_val, light_pdf_val);
+			bsdf_direct_sum += sample_direct_bsdf_once(
+				ray,
+				rec,
+				s_rec,
+				world,
+				p_light,
+				light_direct_sample_count,
+				bsdf_direct_sample_count);
 		}
 
-		if (strategy_pdf <= 0.0)
-			return emitted_color;
+		const Color direct_lighting =
+			light_direct_sum / static_cast<double>(light_direct_sample_count) +
+			bsdf_direct_sum / static_cast<double>(bsdf_direct_sample_count);
+		const Color indirect_lighting =
+			sample_indirect_once(ray, depth, world, lights, rec, s_rec);
+
+		return emitted_color + direct_lighting + indirect_lighting;
+	}
+
+	// Evaluate one explicit light-side direct sample without spawning a recursive subtree.
+	Color sample_direct_light_once(
+		const Ray& ray,
+		const HitRecord& rec,
+		const Scattered_Record& s_rec,
+		const Hittable& world,
+		const std::shared_ptr<PDF>& p_light,
+		const int light_sample_count,
+		const int bsdf_sample_count)
+	{
+		Vector3 dir = p_light->generate();
+		Ray scattered(rec.p, dir, ray.time());
+
+		const double light_pdf = p_light->value(dir);
+		if (light_pdf <= 0.0)
+			return Color(0, 0, 0);
+
+		const double bsdf_pdf = s_rec.p_pdf->value(scattered.direction());
+		const double mis_weight =
+			power_heuristic(light_pdf, light_sample_count, bsdf_pdf, bsdf_sample_count);
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const Vector3 shading_normal = rec.mat->ShadingNormal(rec);
-		const double cos_theta = std::max(dot(shading_normal, normalize(scattered.direction())), 0.0);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
 		if (cos_theta <= 0.0)
-			return emitted_color;
+			return Color(0, 0, 0);
+
+		const Color direct_radiance = trace_direct_radiance(scattered, world);
+
+		return (s_rec.attenuation * f * direct_radiance * cos_theta * mis_weight)
+			/ light_pdf;
+	}
+
+	// Evaluate one explicit BSDF-side direct sample so glossy reflections still have a matching estimator.
+	Color sample_direct_bsdf_once(
+		const Ray& ray,
+		const HitRecord& rec,
+		const Scattered_Record& s_rec,
+		const Hittable& world,
+		const std::shared_ptr<PDF>& p_light,
+		const int light_sample_count,
+		const int bsdf_sample_count)
+	{
+		Vector3 dir = s_rec.p_pdf->generate();
+		Ray scattered(rec.p, dir, ray.time());
+
+		const double bsdf_pdf = s_rec.p_pdf->value(dir);
+		if (bsdf_pdf <= 0.0)
+			return Color(0, 0, 0);
+
+		const double light_pdf = p_light->value(scattered.direction());
+		const double mis_weight =
+			power_heuristic(bsdf_pdf, bsdf_sample_count, light_pdf, light_sample_count);
+
+		const Color f = rec.mat->Eval(ray, rec, scattered);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		if (cos_theta <= 0.0)
+			return Color(0, 0, 0);
+
+		const Color direct_radiance = trace_direct_radiance(scattered, world);
+
+		return (s_rec.attenuation * f * direct_radiance * cos_theta * mis_weight)
+			/ bsdf_pdf;
+	}
+
+	// Continue the path only once through the BSDF after the explicit direct-light estimate.
+	Color sample_indirect_once(
+		const Ray& ray,
+		const int depth,
+		const Hittable& world,
+		const Hittable& lights,
+		const HitRecord& rec,
+		const Scattered_Record& s_rec)
+	{
+		Vector3 dir = s_rec.p_pdf->generate();
+		Ray scattered(rec.p, dir, ray.time());
+
+		const double pdf_value = s_rec.p_pdf->value(dir);
+		if (pdf_value <= 0.0)
+			return Color(0, 0, 0);
+
+		const Color f = rec.mat->Eval(ray, rec, scattered);
+		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		if (cos_theta <= 0.0)
+			return Color(0, 0, 0);
 
 		double p_survival = 1.0;
 		const int bounce = max_depth - depth;
 		if (bounce >= 3)
 		{
-			const Color rr_weight =
-				s_rec.attenuation * f * cos_theta * mis_weight
-				/ (choose_prob * strategy_pdf);
+			const Color rr_weight = (s_rec.attenuation * f * cos_theta) / pdf_value;
 
 			p_survival = std::clamp(
 				std::fmax(rr_weight.x(), std::fmax(rr_weight.y(), rr_weight.z())),
 				0.0001,
 				0.9999);
+
 			if (random_double() > p_survival)
-				return emitted_color;
+				return Color(0, 0, 0);
 		}
 
-		const Color sample_color = ray_color(scattered, depth - 1, world, lights);
-		const Color scattered_color =
-			(s_rec.attenuation * f * sample_color * cos_theta * mis_weight)
-			/ (choose_prob * strategy_pdf * p_survival);
+		// The next call should not add immediate emission again because direct lighting
+		// has already been estimated explicitly at this bounce.
+		const Color indirect_radiance = ray_color(scattered, depth - 1, world, lights, false);
 
+		return (s_rec.attenuation * f * indirect_radiance * cos_theta)
+			/ (pdf_value * p_survival);
+	}
 
-		return emitted_color + scattered_color;
+	// Trace a single visibility ray to either an emissive surface or the environment.
+	Color trace_direct_radiance(const Ray& shadow_ray, const Hittable& world) const
+	{
+		HitRecord light_rec;
+		if (!world.Hit(shadow_ray, Interval(0.001, infinity), light_rec))
+			return miss_radiance(shadow_ray);
+
+		return light_rec.mat->emitted(
+			shadow_ray,
+			light_rec,
+			light_rec.u,
+			light_rec.v,
+			light_rec.p);
 	}
 };

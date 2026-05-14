@@ -137,6 +137,7 @@
     <ClInclude Include="Camera.h" />
     <ClInclude Include="Color.h" />
     <ClInclude Include="Constant_Medium.h" />
+    <ClInclude Include="Environment.h" />
     <ClInclude Include="external\tiny_obj_loader.h" />
     <ClInclude Include="Hittable.h" />
     <ClInclude Include="Hittable_List.h" />
