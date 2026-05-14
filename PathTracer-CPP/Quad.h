@@ -87,7 +87,7 @@ public :
 			return 0.0;
 
 		const Point3 center = Q + 0.5 * u + 0.5 * v;
-		const double emitted_luminance = mat->EmissionLuninance(0.5, 0.5, center);
+		const double emitted_luminance = mat->EmissionLuminance(0.5, 0.5, center);
 
 		// The power of the light emitted from the quad
 		return emitted_luminance * area;

@@ -62,6 +62,12 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
+	double sampling_power_estimate() const override
+	{
+		return object->sampling_power_estimate();
+	}
+
+
 private :
 	std::shared_ptr<Hittable> object;
 	Vector3 offset;
@@ -159,6 +165,12 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
+	double sampling_power_estimate() const override
+	{
+		return object->sampling_power_estimate();
+	}
+
+
 private :
 	std::shared_ptr<Hittable> object;
 	double sin_theta;
@@ -218,6 +230,20 @@ public:
 	}
 
 	AABB bounding_box() const override { return bbox; }
+
+	double sampling_power_estimate() const override
+	{
+		const double sx = std::abs(scale.x());
+		const double sy = std::abs(scale.y());
+		const double sz = std::abs(scale.z());
+
+		// A similar approach to the surface area scaling factor for a scaled sphere,
+		// which is proportional to the average of the products of the scale factors along each pair of axes.
+		const double area_scale = (sx * sy + sy * sz + sz * sx) / 3.0;
+
+		return object->sampling_power_estimate() * area_scale;
+	}
+
 
 private:
 	std::shared_ptr<Hittable> object;
