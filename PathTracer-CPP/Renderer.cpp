@@ -32,6 +32,7 @@ void Obj_PBR_Test();
 void PBR_Benchmark();
 void PBR_Normal_Map_Test();
 void PBR_IBL_Test();
+void README_Showcase();
 
 void RenderAndPreview(Camera& cam, const Hittable& world)
 {
@@ -54,7 +55,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 
 int main()
 {
-	switch (18)
+	switch (19)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -74,6 +75,7 @@ int main()
 		case 16:  PBR_Normal_Map_Test();                    break;
 		case 17:  Obj_PBR_Test();                           break;
 		case 18:  PBR_IBL_Test();                           break;
+		case 19:  README_Showcase();                        break;
 	}
 }
 
@@ -1054,5 +1056,103 @@ void PBR_IBL_Test()
 		false));
 
 	std::clog << "Start rendering PBR IBL + area light test scene...\n";
+	RenderAndPreview(cam, world, lights);
+}
+
+void README_Showcase()
+{
+	Hittable_List world;
+	Hittable_List lights;
+
+	auto ground_mat = std::make_shared<Lambertian>(Color(0.56, 0.56, 0.58));
+	world.add(std::make_shared<Quad>(
+		Point3(-14.0, -1.0, -14.0),
+		Vector3(28.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 28.0),
+		ground_mat));
+
+	// Reuse the same sphere primitive as the IBL validation scene and spread the
+	// material variety across the spheres so the README image shows the renderer's
+	// current visible feature set in one composition.
+	auto metal1_pbr = std::make_shared<PBR_Material>(
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_Color.jpg",
+			color_space::SRGB),
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_NormalGL.jpg",
+			color_space::Linear),
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_Roughness.jpg",
+			color_space::Linear),
+		std::make_shared<Image_Texture>(
+			"images/Metal1/Metal049A_2K-JPG_Metalness.jpg",
+			color_space::Linear));
+
+	auto gold_pbr = std::make_shared<PBR_Material>(
+		std::make_shared<Image_Texture>(
+			"images/Metal_Gold/Metal048C_1K-JPG_Color.jpg",
+			color_space::SRGB),
+		std::make_shared<Image_Texture>(
+			"images/Metal_Gold/Metal048C_1K-JPG_NormalGL.jpg",
+			color_space::Linear),
+		std::make_shared<Image_Texture>(
+			"images/Metal_Gold/Metal048C_1K-JPG_Roughness.jpg",
+			color_space::Linear),
+		std::make_shared<Image_Texture>(
+			"images/Metal_Gold/Metal048C_1K-JPG_Metalness.jpg",
+			color_space::Linear));
+
+	auto earth_mat = std::make_shared<Lambertian>(
+		std::make_shared<Image_Texture>("earthmap.jpg", color_space::SRGB));
+	auto noise_mat = std::make_shared<Lambertian>(std::make_shared<Noise_Texture>(3.2));
+	auto glass_mat = std::make_shared<Dielectric>(1.5);
+	auto classic_metal = std::make_shared<Metal>(Color(0.88, 0.90, 0.94), 0.08);
+
+	world.add(std::make_shared<Sphere>(Point3(0.0, 0.55, 0.85), 1.55, metal1_pbr));
+	world.add(std::make_shared<Sphere>(Point3(2.95, -0.08, 0.75), 0.92, gold_pbr));
+	world.add(std::make_shared<Sphere>(Point3(-2.55, -0.08, 0.95), 0.92, glass_mat));
+	world.add(std::make_shared<Sphere>(Point3(-4.6, -0.20, -1.7), 0.80, earth_mat));
+	world.add(std::make_shared<Sphere>(Point3(4.65, -0.12, -1.55), 0.88, noise_mat));
+	world.add(std::make_shared<Sphere>(Point3(0.2, -0.28, -3.2), 0.72, classic_metal));
+
+	// Keep one participating-medium sphere in the background so the scene still
+	// exposes the volumetric path without fighting for the main composition.
+	auto fog_boundary = std::make_shared<Sphere>(Point3(2.35, 0.08, -2.65), 1.05, glass_mat);
+	world.add(fog_boundary);
+	world.add(std::make_shared<Constant_Medium>(fog_boundary, 0.17, Color(0.22, 0.42, 0.88)));
+
+	// Use an explicit area light so the showcase still exercises direct-light MIS
+	// instead of relying on HDRI highlights alone.
+	auto area_light_mat = std::make_shared<Diffuse_Light>(Color(16.0, 15.0, 14.0));
+	auto area_light = std::make_shared<Quad>(
+		Point3(-3.0, 5.8, 1.8),
+		Vector3(6.0, 0.0, 0.0),
+		Vector3(0.0, 0.0, 4.2),
+		area_light_mat);
+	world.add(area_light);
+	lights.add(area_light);
+
+	world = Hittable_List(std::make_shared<BVH_Node>(world));
+
+	Camera cam;
+	cam.aspect_ratio = 16.0 / 9.0;
+	cam.image_width = 1280;
+	cam.sample_per_pixel = 400;
+	cam.max_depth = 25;
+	cam.vfov = 24;
+	cam.lookfrom = Point3(0.35, 1.95, 10.2);
+	cam.lookat = Point3(0.15, 0.65, 0.15);
+	cam.up = Vector3(0, 1, 0);
+	cam.focus_dist = 10.0;
+	cam.defocus_angle = 0.35;
+	cam.background = Color(0.02, 0.02, 0.02);
+	cam.output_filename = "readme_showcase.ppm";
+	cam.SetEnvironment(std::make_shared<LatLong_Environment>(
+		"images/HDR/suburban_garden_2k.hdr",
+		1.35,
+		0.0,
+		false));
+
+	std::clog << "Start rendering README showcase scene...\n";
 	RenderAndPreview(cam, world, lights);
 }
