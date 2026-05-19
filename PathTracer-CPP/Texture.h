@@ -6,6 +6,7 @@
 
 enum class color_space
 {
+	// Base color maps use SRGB. Data maps like roughness/metallic/normal use Linear.
 	SRGB,
 	Linear
 };
@@ -20,6 +21,7 @@ public :
 
 	static double srgb_to_linear(double x)
 	{
+		// Convert artist-authored color textures before BRDF evaluation.
 		if (x <= 0.04045)
 			return x / 12.92;
 		return std::pow((x + 0.055) / 1.055, 2.4);

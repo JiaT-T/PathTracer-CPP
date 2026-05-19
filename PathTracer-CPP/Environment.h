@@ -23,6 +23,7 @@ public:
 class LatLong_Environment : public Environment
 {
 public:
+	// Lat-long HDRI environment. It is sampled as visible background and as an importance-sampled light.
 	LatLong_Environment(
 		const std::string& filename,
 		double intensity = 1.0,
@@ -38,6 +39,7 @@ public:
 
 	Color radiance(const Vector3& dir) const override
 	{
+		// Convert ray direction to HDR texture lookup.
 		if (!image.is_valid())
 			return Color(1.0, 0.0, 1.0);
 
@@ -67,6 +69,7 @@ public:
 		// Convert the texel probability to a PDF value in uv space
 		const double pdf_uv = p_texel / texel_area_uv;
 
+		// Convert UV-space PDF to solid-angle PDF. The path tracer divides by this value.
 		// lat-long: domega = 2*pi*pi*sin(theta) du dv
 		const double theta = v * pi;
 		const double sin_theta = std::max(std::sin(theta), 1e-6);
@@ -80,7 +83,7 @@ public:
 		if (!image.is_valid() || width <= 0 || height <= 0 || total_weight <= 0.0)
 			return random_unit_vector();
 
-		// Get a random coordinate (x, y) from the precomputed CDFs
+		// Get a random coordinate (x, y) from the precomputed luminance CDFs.
 		const auto [x, y] = sample_pixel_indices();
 
 		// Jittering the uv in the texel
@@ -90,7 +93,7 @@ public:
 		return uv_to_direction(u, v);
 	}
 
-	// Average brightness of env * the area of sphere
+	// Rough power estimate used to mix environment sampling with geometry-light sampling.
 	double sampling_power_estimate() const override
 	{
 		return intensity * total_weight;
@@ -173,7 +176,7 @@ private:
 		return (1.0 - ty) * cx0 + ty * cx1;
 	}
 
-	// HDR -> LDR
+	// Luminance decides which texels should be sampled more often.
 	double luminance(const Color& c) const
 	{
 		return 0.2126 * c.x() + 0.7152 * c.y() + 0.0722 * c.z();
@@ -191,8 +194,8 @@ private:
 		return normalize(Vector3(x, y, z));
 	}
 
-	// Precompute the sampling distribution for importance sampling during initialization
-	// Transforms the environment map to a datastructure that allows for efficient sampling
+	// Precompute the sampling distribution for importance sampling during initialization.
+	// Two-level CDF: first pick a row, then pick a texel inside that row.
 	void build_sampling_distribution()
 	{
 		width = image.width();

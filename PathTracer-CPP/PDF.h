@@ -81,6 +81,7 @@ public :
 
 	double value(const Vector3& dir) const override
 	{
+		// Probability of the mixed strategy must be the same weighted sum used by generate().
 		return weight0 * p[0]->value(dir) + (1.0 - weight0) * p[1]->value(dir);
 	}
 	Vector3 generate() const override
@@ -103,6 +104,7 @@ public:
 		alpha = roughness * roughness;
 	}
 
+	// Specular PDF used by PBR_Material. VNDF samples visible microfacets from the view direction.
 	// GGX_NDF : pdf(l) = D(m) * cos_theta / (4 * dot(v, m))
 	// GGX_VNDF: pdf(h) = D(m) * G1(v) * dot(v, m) / dot(n, v), then pdf(l) = pdf(h) / (4 * dot(v, m))
 	double value(const Vector3& dir) const override
@@ -129,6 +131,7 @@ public:
 
 	Vector3 generate() const override
 	{
+		// Sample a visible half vector, then reflect the view vector around it.
 		const Vector3 v_local = to_local(view_dir);
 		const Vector3 h_local = sample_visible_half_vector_local(v_local);
 		const Vector3 h = normalize(uvw.transform(h_local));
@@ -170,14 +173,14 @@ private:
 			v_local.z());
 		vh = normalize(vh);
 
-		// Create based vector with stretched view direction
+		// Create a basis from the stretched view direction.
 		double lensq = vh.x() * vh.x() + vh.y() * vh.y();
 		Vector3 T1 = lensq > 0.0 
 			? Vector3(-vh.y(), vh.x(), 0) / std::sqrt(lensq)
 			: Vector3(1.0, 0.0, 0.0);
 		Vector3 T2 = cross(vh, T1);
 
-		// Sample point with polar coordinates (r, phi) in "Visibily Nomal Domain"
+		// Sample a point with polar coordinates in the visible-normal domain.
 		double u1 = random_double();
 		double u2 = random_double();
 
@@ -187,9 +190,7 @@ private:
 		double t1 = r * std::cos(phi);
 		double t2 = r * std::sin(phi);
 
-		// Reproject on hemisphere
-		// which can make sample direction more likely align with those nomal directions that are visible to the view direction
-		// rather than sampling uniformly in the hemisphere which can generate many invisible samples when roughness is small
+		// Reproject on the hemisphere so glossy surfaces waste fewer samples on invisible normals.
 		double s = 0.5 * (1.0 + vh.z());
 		t2 = (1.0 - s) * std::sqrt(std::max(0.0, 1.0 - t1 * t1)) + s * t2;
 

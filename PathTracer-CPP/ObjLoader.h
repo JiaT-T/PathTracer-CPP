@@ -61,13 +61,13 @@ public:
                     {
                         tinyobj::index_t idx = shapes[s].mesh.indices[index_offset + v];
 
-                        // Abstruct Vertex's Corrinate
+                        // Read vertex position.
                         tinyobj::real_t vx = attrib.vertices[3 * size_t(idx.vertex_index) + 0];
                         tinyobj::real_t vy = attrib.vertices[3 * size_t(idx.vertex_index) + 1];
                         tinyobj::real_t vz = attrib.vertices[3 * size_t(idx.vertex_index) + 2];
                         vertices[v] = Point3(vx, vy, vz);
 
-                        // Abstruct Texture's Corrinate
+                        // Read UV. PBR textures and normal maps need valid UVs.
                         if (idx.texcoord_index >= 0)
                         {
                             tinyobj::real_t tx = attrib.texcoords[2 * size_t(idx.texcoord_index) + 0];
@@ -162,7 +162,7 @@ private:
         std::shared_ptr<Texture> roughness_tex = nullptr;
         std::shared_ptr<Texture>  metallic_tex = nullptr;
 
-        // Has Diffuse Texture
+        // Base color is an artist color map, so it is treated as sRGB input.
         if (!source_material.diffuse_texname.empty())
             base_tex = load_texture(obj_directory, source_material.diffuse_texname, color_space::SRGB);
 
@@ -174,7 +174,7 @@ private:
         if (!base_tex && diffuse_color.length_squared() > 0.0)
             base_tex = std::make_shared<Solid_Color>(diffuse_color);
 
-        // Load PBR Textures if available
+        // Normal, roughness, and metallic maps store data, so they stay in linear space.
         if (!source_material.normal_texname.empty())
             normal_tex = load_texture(obj_directory, source_material.normal_texname, color_space::Linear);
         else if (!source_material.bump_texname.empty())
@@ -195,6 +195,7 @@ private:
 
         if (has_pbr_maps)
         {
+            // If any PBR data map exists, build the metallic-roughness material.
             const auto normal_map_convention = infer_normal_map_convention(
                 !source_material.normal_texname.empty() ? source_material.normal_texname
                                                         : source_material.bump_texname);
@@ -253,6 +254,7 @@ private:
 
     static PBR_Material::Normal_Map_Convention infer_normal_map_convention(const std::string& texname)
     {
+        // Asset packs often mark DirectX normal maps in the filename.
         std::string lowered;
         lowered.reserve(texname.size());
         for (char ch : texname)

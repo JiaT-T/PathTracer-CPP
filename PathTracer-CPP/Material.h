@@ -10,6 +10,7 @@ class Scattered_Record
 public :
 	Color attenuation = Color(1.0, 1.0, 1.0);
 	std::shared_ptr<PDF> p_pdf;
+	// Delta materials like mirror/glass skip normal PDF sampling and provide a final ray directly.
 	bool skip_pdf = false;
 	Ray skip_pdf_ray;
 };
@@ -21,6 +22,7 @@ class Material
 public:
 	virtual ~Material() = default;
 
+	// Scatter chooses the next-ray sampling strategy. Eval and PDF must describe the same BSDF.
 	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const { return false; }
 	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
 	virtual Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return Color(0, 0, 0); }
@@ -201,12 +203,14 @@ private :
 class PBR_Material : public Material
 {
 public :
+	// OpenGL normal maps store +Y in green; DirectX normal maps store -Y.
 	enum class Normal_Map_Convention
 	{
 		OpenGL,
 		DirectX
 	};
 
+	// Metallic-roughness PBR material. Base color is color data, while normal/roughness/metallic are data maps.
 	PBR_Material(
 		std::shared_ptr<Texture> base_tex,
 		std::shared_ptr<Texture> normal_tex,
@@ -221,6 +225,7 @@ public :
 
 	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
 	{
+		// Use a mixed PDF: cosine sampling for diffuse and GGX sampling for the specular lobe.
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const double specular_weight = compute_specular_weight(metallic);
@@ -239,6 +244,7 @@ public :
 
 	Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
 	{
+		// Evaluate the actual BRDF value for the sampled direction.
 		const Vector3 v = normalize(-ray_in.direction());
 		const Vector3 l = normalize(scattered.direction());
 		const Vector3 n = corrected_shading_normal(rec, v);
@@ -253,9 +259,11 @@ public :
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const Color dielectric_f0(0.04, 0.04, 0.04);
+		// F0 is 0.04 for dielectric and becomes base color for metals.
 		const Color f0 = lerp(dielectric_f0, base_color, metallic);
 		const Color F = fresnel_schlick(std::max(dot(v, normalize(v + l)), 0.0), f0);
 		const Color specular = cook_torrance_specular(n, v, l, roughness, f0);
+		// Metals have no diffuse term. Dielectrics keep diffuse energy after Fresnel reflection.
 		const Color kd = (Color(1.0, 1.0, 1.0) - F) * (1.0 - metallic);
 		const Color diffuse = kd * base_color / pi;
 
@@ -264,6 +272,7 @@ public :
 
 	double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
 	{
+		// Keep the PDF weights matched with Scatter(), otherwise MIS becomes biased.
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
 		const double specular_weight = compute_specular_weight(metallic);
@@ -288,7 +297,7 @@ public :
 		float roughness,
 		Vector3 f0) const
 	{
-		// half-vector
+		// Cook-Torrance = D * G * F / (4 * NdotV * NdotL).
 		Vector3 h = normalize(v + l);
 
 		double n_dot_v = std::max(dot(n, v), 0.0001);
@@ -327,6 +336,7 @@ private:
 		return tex ? tex->value(rec.u, rec.v, rec.p) : Color(1.0, 1.0, 1.0);
 	}
 
+	// Roughness and metallic maps are scalar textures, so only the red channel is used.
 	static double sample_scalar(const std::shared_ptr<Texture>& tex, const HitRecord& rec, double fallback, double min_value, double max_value)
 	{
 		if (!tex)
@@ -338,6 +348,7 @@ private:
 
 	Vector3 fresnel_schlick(double cos_theta, const Vector3& F0) const
 	{
+		// Cheap Fresnel approximation: reflection gets stronger at grazing angles.
 		const auto x = std::clamp(1.0 - cos_theta, 0.0, 1.0);
 		const auto x2 = x * x;
 		const auto x5 = x2 * x2 * x;
@@ -346,6 +357,7 @@ private:
 
 	double distribution_ggx(double n_dot_h, double roughness) const
 	{
+		// GGX normal distribution. Lower roughness gives a tighter highlight.
 		auto a = roughness * roughness;
 		auto a2 = a * a;
 		auto denom = (n_dot_h * n_dot_h) * (a2 - 1.0) + 1.0;
@@ -355,6 +367,7 @@ private:
 
 	double geometry_smith(double n_dot_v, double n_dot_l, double roughness) const
 	{
+		// Smith masking-shadowing term. It reduces light blocked by microfacets.
 		double r = roughness + 1.0;
 		double k = (r * r) / 8.0;
 
@@ -370,7 +383,7 @@ private:
 		return n_dot_v / denom;
 	}
 
-	// Returns the World Space normal vector
+	// Return a world-space normal from the normal map when valid TBN data exists.
 	Vector3 sample_shading_normal(const HitRecord& rec) const
 	{
 		if (!normal_tex || !rec.has_tangent_space)
@@ -389,6 +402,7 @@ private:
 
 		Vector3 N = rec.n;
 
+		// Re-orthogonalize TBN because interpolation and transforms can make it drift.
 		Vector3 T = rec.tangent - dot(rec.tangent, N) * N;
 		if (T.length_squared() < 1e-10) return rec.n;
 		T = normalize(T);
@@ -419,6 +433,7 @@ private:
 
 	static Vector3 correct_shading_normal_to_direction(const Vector3& shading_normal, const Vector3& geometric_normal, const Vector3& direction)
 	{
+		// Normal maps can tilt below the true surface. Pull them back to avoid black/firefly samples.
 		const double geom_dot = dot(geometric_normal, direction);
 		const double shade_dot = dot(shading_normal, direction);
 		if (geom_dot <= 0.0 || shade_dot > 0.0)
@@ -440,6 +455,7 @@ private:
 
 	static double compute_specular_weight(double metallic)
 	{
+		// Heuristic for choosing diffuse vs specular samples; it is not part of the BRDF value.
 		return std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
 	}
 

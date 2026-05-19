@@ -125,6 +125,7 @@ private :
 
 	void compute_tangent_space()
 	{
+		// Tangent space is needed to move normal-map values from texture space to world space.
 		has_tangent_space = false;
 
 		Vector3 edge1 = v1 - v0;
@@ -182,6 +183,7 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	Vector3 shading_normal;
 	if (has_vertex_normal)
 	{
+		// Smooth shading uses barycentric interpolation of the OBJ vertex normals.
 		double w = 1.0 - u - v;
 		shading_normal = w * n0 + u * n1 + v * n2;
 
@@ -207,6 +209,7 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 
 	rec.mat = mat;
 	rec.front_face = dot(ray.direction(), face_normal) < 0;
+	// Keep both normals: geo_n is for robust sidedness, n is for visible shading.
 	rec.geo_n = rec.front_face ? face_normal : -face_normal;
 	rec.n = rec.front_face ? shading_normal : -shading_normal;
 	rec.tangent = tangent;

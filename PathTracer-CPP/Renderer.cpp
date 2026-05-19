@@ -84,6 +84,7 @@ std::pair<Hittable_List, Hittable_List> BuildPBRValidationScene()
 	Hittable_List world;
 	Hittable_List lights;
 
+	// Simple matrix scene for checking roughness and metallic response under one area light.
 	auto light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
 	auto ground_mat = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
 
@@ -751,6 +752,7 @@ void PBR_Test()
 	Hittable_List world;
 	Hittable_List lights;
 
+	// Cornell box keeps lighting controlled while the sphere uses real PBR texture maps.
 	auto red = std::make_shared<Lambertian>(Color(.65, .05, .05));
 	auto white = std::make_shared<Lambertian>(Color(.73, .73, .73));
 	auto green = std::make_shared<Lambertian>(Color(.12, .45, .15));
@@ -853,6 +855,7 @@ void PBR_Normal_Map_Test()
 	Hittable_List world;
 	Hittable_List lights;
 
+	// Side-by-side panels compare the same material with and without the normal map.
 	auto light_mat = std::make_shared<Diffuse_Light>(Color(120, 120, 120));
 	auto fill_light_mat = std::make_shared<Diffuse_Light>(Color(18, 18, 18));
 	auto ground_mat = std::make_shared<Lambertian>(Color(0.65, 0.65, 0.65));
@@ -949,6 +952,7 @@ void Obj_PBR_Test()
 	Hittable_List world;
 	Hittable_List lights;
 
+	// This scene checks the automatic OBJ/MTL path for PBR textures.
 	auto red = make_shared<Lambertian>(Color(.65, .05, .05));
 	auto white = make_shared<Lambertian>(Color(.73, .73, .73));
 	auto green = make_shared<Lambertian>(Color(.12, .45, .15));
@@ -1003,6 +1007,7 @@ void PBR_IBL_Test()
 	Hittable_List world;
 	Hittable_List lights;
 
+	// HDRI gives the background and environment lighting; the area light adds a controlled highlight.
 	auto ground_mat = std::make_shared<Lambertian>(Color(0.55, 0.55, 0.55));
 	world.add(std::make_shared<Quad>(
 		Point3(-12.0, -1.0, -12.0),

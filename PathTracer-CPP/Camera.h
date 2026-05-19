@@ -17,6 +17,7 @@
 
 static double power_heuristic(double pdf_a, double pdf_b)
 {
+	// Balance two estimators for MIS. Squared PDFs give the power heuristic.
 	double a2 = pdf_a * pdf_a;
 	double b2 = pdf_b * pdf_b;
 	double denom = a2 + b2;
@@ -409,6 +410,7 @@ private :
 
 	Color miss_radiance(const Ray& ray) const
 	{
+		// If an HDR environment is set, it becomes both background and light source.
 		if (environment)
 			return environment->radiance(ray.direction());
 		return background;
@@ -423,6 +425,7 @@ private :
 		if (!environment)
 			return p_geo;
 
+		// Mix scene lights and environment map by estimated power, useful for IBL scenes.
 		auto p_env = std::make_shared<Environment_PDF>(*environment);
 
 		const double env_power = environment->sampling_power_estimate();
@@ -498,6 +501,7 @@ private :
 		auto p_light = build_light_pdf(lights, rec.p);
 
 		const int bounce = max_depth - depth;
+		// More first-bounce light samples reduce direct-light noise where the image is most visible.
 		const int light_direct_sample_count = (bounce == 0) ? first_bounce_samples : 1;
 		const int bsdf_direct_sample_count = 1;
 
@@ -532,6 +536,7 @@ private :
 		const Color direct_lighting =
 			light_direct_sum / static_cast<double>(light_direct_sample_count) +
 			bsdf_direct_sum / static_cast<double>(bsdf_direct_sample_count);
+		// Direct lighting is estimated explicitly; recursion only carries indirect light forward.
 		const Color indirect_lighting =
 			sample_indirect_once(ray, depth, world, lights, rec, s_rec);
 
@@ -627,6 +632,7 @@ private :
 		const int bounce = max_depth - depth;
 		if (bounce >= 3)
 		{
+			// Russian roulette ends low-energy paths after a few bounces without biasing the result.
 			const Color rr_weight = (s_rec.attenuation * f * cos_theta) / pdf_value;
 
 			p_survival = std::clamp(

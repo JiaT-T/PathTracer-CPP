@@ -7,8 +7,10 @@ class HitRecord
 {
 public :
 	Point3 p;
+	// n is the shading normal; geo_n is the real surface normal used for sidedness checks.
 	Vector3 n;
 	Vector3 geo_n = Vector3(0, 1, 0);
+	// Tangent space is optional, but PBR normal maps need it when present.
 	Vector3 tangent = Vector3(1, 0, 0);
 	Vector3 bitangent = Vector3(0, 0, 1);
 	double t = 0.0;
