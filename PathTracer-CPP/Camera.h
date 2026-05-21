@@ -474,6 +474,7 @@ private :
 		return emitted_color + scattered_color;
 	}
 
+	// Ver.2
 	// Suppress immediate emission / environment when the caller already handles direct lighting explicitly.
 	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights, bool allow_emission)
 	{
@@ -481,17 +482,28 @@ private :
 			return Color(0, 0, 0);
 
 		HitRecord rec;
+		// 0.001 is a small epsilon to prevent shadow acne
+		// when cannot hit anything, return environment radiance if allowed, 
+		// otherwise return black
 		if (!world.Hit(ray, Interval(0.001, infinity), rec))
 			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
 
 		Scattered_Record s_rec{};
+		// When hit a surface,
+		// we need to consider whether the surface emits light by itself or not, 
+		// and whether the ray should be scattered further or not
 		const Color emitted_color =
 			allow_emission ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p)
 			: Color(0, 0, 0);
 
+		// If cannot hit anything further, 
+		// return the emitted color only
 		if (!rec.mat->Scatter(ray, rec, s_rec))
 			return emitted_color;
 
+		// If the material is those materials whose reflected rays / refracted rays are not sampling from PDF,
+		// rather directly determined by the material itself,
+		// we can directly trace the ray without explicit direct-light sampling
 		if (s_rec.skip_pdf)
 		{
 			// Delta paths cannot use explicit direct-light sampling, so keep emission enabled.
