@@ -109,6 +109,8 @@ public :
 	}
 
 private :
+	// Define the size of per tile
+	// or how many pixels in this tile
 	struct RenderTile
 	{
 		int x_begin = 0;
@@ -134,11 +136,18 @@ private :
 
 		// Renderer
 		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+		// The final pixel colors are first stored in a framebuffer,
+		// and then written to the output file at the end of rendering.
 		std::vector<Color> framebuffer(static_cast<size_t>(image_width) * image_height);
+		// Use another buffer to store the preview image pixels
 		std::vector<unsigned char> preview_pixels;
 		auto preview_start_time = std::chrono::steady_clock::now();
 		auto last_preview_update_time = preview_start_time;
+		// This mutex is not used for main rendering process,
+		// but only for synchronizing the preview updates and progress display in the console.
 		std::mutex progress_mutex;
+		// Cause each tile may complete a different number of rows,
+		// we need to track the progress of each row separately to display the remaining scanlines correctly.
 		std::atomic<int> completed_rows{ 0 };
 		std::atomic<int> completed_tiles{ 0 };
 		std::vector<std::atomic<int>> row_progress(static_cast<size_t>(image_height));
@@ -189,6 +198,7 @@ private :
 				blit_tile_preview(tile, tile_preview_bytes, preview_pixels);
 			}
 
+			// The 0.033 means we update the preview at most 30 times per second,
 			if (is_last_tile ||
 				std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033)
 			{
@@ -204,6 +214,7 @@ private :
 			}
 		};
 
+		// Invoke parallel or serial rendering based on the render mode
 		if (render_mode == Render_Mode::Parallel)
 			std::for_each(std::execution::par, tiles.begin(), tiles.end(), render_tile);
 		else
@@ -231,6 +242,7 @@ private :
 
 	std::vector<RenderTile> build_tiles() const
 	{
+		// Split the whole image into small independent blocks for parallel scheduling.
 		std::vector<RenderTile> tiles;
 		tiles.reserve(((image_width + kTileSize - 1) / kTileSize) * ((image_height + kTileSize - 1) / kTileSize));
 
@@ -265,6 +277,7 @@ private :
 		const std::vector<Color_Bytes>& tile_preview_bytes,
 		std::vector<unsigned char>& preview_pixels)
 	{
+		// Copy a finished tile into the full BGRA preview buffer used by the Win32 preview window.
 		const size_t local_width = static_cast<size_t>(tile_width(tile));
 		for (int j = tile.y_begin; j < tile.y_end; j++)
 		{
@@ -288,6 +301,7 @@ private :
 		std::vector<std::atomic<int>>& row_progress,
 		std::atomic<int>& completed_rows)
 	{
+		// A row is counted as finished only after all tile-width chunks in that row are done.
 		const int width = tile_width(tile);
 		for (int j = tile.y_begin; j < tile.y_end; j++)
 		{
@@ -322,6 +336,7 @@ private :
 		// Ensure the height always greater than 1
 		image_height = (image_height < 1) ? 1 : image_height;
 
+		// Stratified sampling uses a square grid, so only sqrt_spp * sqrt_spp samples are taken.
 		sqrt_spp = static_cast<int>(std::sqrt(sample_per_pixel));
 		recip_sqrt_spp = 1.0 / sqrt_spp;
 		pixel_sample_scale = 1.0 / (sqrt_spp * sqrt_spp);
@@ -445,6 +460,7 @@ private :
 			return Color(0, 0, 0);
 
 		HitRecord rec;
+		// This simple path tracer version has no explicit light sampling, so misses can see the background.
 		if (!world.Hit(ray, Interval(0.001, infinity), rec))
 			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
 
@@ -458,6 +474,7 @@ private :
 
 		if (s_rec.skip_pdf)
 		{
+			// Specular and dielectric events already provide the next ray, so there is no PDF division here.
 			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, true);
 		}
 
@@ -513,6 +530,7 @@ private :
 		auto p_light = build_light_pdf(lights, rec.p);
 
 		const int bounce = max_depth - depth;
+		// Bounce zero is the camera-visible surface, where extra direct-light samples help most.
 		// More first-bounce light samples reduce direct-light noise where the image is most visible.
 		const int light_direct_sample_count = (bounce == 0) ? first_bounce_samples : 1;
 		const int bsdf_direct_sample_count = 1;
@@ -668,6 +686,7 @@ private :
 	Color trace_direct_radiance(const Ray& shadow_ray, const Hittable& world) const
 	{
 		HitRecord light_rec;
+		// Missing scene geometry means the shadow ray reached the HDR environment, if one exists.
 		if (!world.Hit(shadow_ray, Interval(0.001, infinity), light_rec))
 			return miss_radiance(shadow_ray);
 
