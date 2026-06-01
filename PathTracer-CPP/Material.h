@@ -34,7 +34,7 @@ public:
 	// 1.0 : Only prefer BSDF sampling
 	virtual double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const { return 0.5; }
 
-	// Returns "How much light is emitted from the material at the given point (u, v, p)".
+	// Returns "How much light is emitted from the material at the given point (u, v, p)"
 	virtual double EmissionLuminance(double u, double v, const Point3& p) const
 	{
 		return 0.0;
@@ -203,14 +203,15 @@ private :
 class PBR_Material : public Material
 {
 public :
-	// OpenGL normal maps store +Y in green; DirectX normal maps store -Y.
+	// OpenGL normal maps store +Y in green; DirectX normal maps store -Y
 	enum class Normal_Map_Convention
 	{
 		OpenGL,
 		DirectX
 	};
 
-	// Metallic-roughness PBR material. Base color is color data, while normal/roughness/metallic are data maps.
+	// Metallic-roughness PBR material.
+	// Base color is color data, while normal/roughness/metallic are data maps
 	PBR_Material(
 		std::shared_ptr<Texture> base_tex,
 		std::shared_ptr<Texture> normal_tex,
@@ -386,9 +387,12 @@ private:
 	// Return a world-space normal from the normal map when valid TBN data exists.
 	Vector3 sample_shading_normal(const HitRecord& rec) const
 	{
+		// If there no normal map or TBN datas
+		// Just returns the original normal
 		if (!normal_tex || !rec.has_tangent_space)
 			return rec.n;
 		
+		// Subtract the normal data from normal map
 		Color normal_color = normal_tex->value(rec.u, rec.v, rec.p);
 		// Normal in tangent space, remap from [0, 1] to [-1, 1]
 		Vector3 n_ts(
@@ -455,7 +459,7 @@ private:
 
 	static double compute_specular_weight(double metallic)
 	{
-		// Heuristic for choosing diffuse vs specular samples; it is not part of the BRDF value.
+		// Heuristic for choosing diffuse or specular samples; it is not part of the BRDF value.
 		return std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
 	}
 
