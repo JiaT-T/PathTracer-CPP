@@ -38,7 +38,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world)
 {
 	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
 	Timer timer;
-	cam.Render(world, &preview);
+	cam.RenderProgressive(world, &preview);
 	const double render_seconds = timer.stop();
 	preview.SetFinished(render_seconds);
 	preview.WaitUntilClosed();
@@ -47,7 +47,7 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 {
 	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
 	Timer timer;
-	cam.Render(world, lights, &preview);
+	cam.RenderProgressive(world, lights, &preview);
 	const double render_seconds = timer.stop();
 	preview.SetFinished(render_seconds);
 	preview.WaitUntilClosed();
