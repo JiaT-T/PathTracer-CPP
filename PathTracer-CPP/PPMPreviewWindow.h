@@ -57,6 +57,32 @@ public:
 			PostMessageW(hwnd, WM_APP + 1, 0, 0);
 	}
 
+	void UpdateProgressiveImage(
+		const std::vector<unsigned char>& dib_pixels,
+		int completed_samples,
+		int total_samples,
+		double elapsed_seconds)
+	{
+		HWND hwnd = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (state->closed)
+				return;
+
+			state->dib_pixels = dib_pixels;
+			state->info_text = build_progressive_rendering_text(
+				elapsed_seconds,
+				completed_samples,
+				total_samples,
+				state->width,
+				state->height);
+			hwnd = state->hwnd;
+		}
+
+		if (hwnd)
+			PostMessageW(hwnd, WM_APP + 1, 0, 0);
+	}
+
 	void SetFinished(double render_seconds)
 	{
 		HWND hwnd = nullptr;
@@ -157,6 +183,21 @@ private:
 
 		stream.seekp(0, std::ios_base::end);
 		stream << L"    Scanlines: " << completed_rows << L" / " << height;
+		return stream.str();
+	}
+
+	static std::wstring build_progressive_rendering_text(
+		double elapsed_seconds,
+		int completed_samples,
+		int total_samples,
+		int width,
+		int height)
+	{
+		std::wostringstream stream;
+		stream << std::fixed << std::setprecision(2)
+			   << L"Elapsed: " << elapsed_seconds << L" s"
+			   << L"    Resolution: " << width << L" x " << height
+			   << L"    Samples: " << completed_samples << L" / " << total_samples;
 		return stream.str();
 	}
 

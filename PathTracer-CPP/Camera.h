@@ -108,6 +108,32 @@ public :
 			preview);
 	}
 
+	void RenderProgressive(const Hittable& world, PPMPreviewWindow* preview = nullptr)
+	{
+		render_progressive_impl(
+			[&](int i, int j, int sample_index)
+			{
+				const int s_i = sample_index % sqrt_spp;
+				const int s_j = sample_index / sqrt_spp;
+				Ray r = get_ray(i, j, s_i, s_j);
+				return ray_color(r, max_depth, world);
+			},
+			preview);
+	}
+
+	void RenderProgressive(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
+	{
+		render_progressive_impl(
+			[&](int i, int j, int sample_index)
+			{
+				const int s_i = sample_index % sqrt_spp;
+				const int s_j = sample_index / sqrt_spp;
+				Ray r = get_ray(i, j, s_i, s_j);
+				return ray_color(r, max_depth, world, lights);
+			},
+			preview);
+	}
+
 private :
 	// Define the size of per tile
 	// or how many pixels in this tile
@@ -240,6 +266,92 @@ private :
 		std::clog << "\rDone.                 \n";
 	}
 
+	template <typename SampleShader>
+	void render_progressive_impl(SampleShader&& sample_shader, PPMPreviewWindow* preview)
+	{
+		initialize();
+
+		std::ofstream out(output_filename);
+		if (!out.is_open())
+		{
+			std::cerr << "Error: Cannot open file.\n";
+			return;
+		}
+
+		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+
+		const size_t pixel_count = static_cast<size_t>(image_width) * image_height;
+		std::vector<Color> accumulation(pixel_count, Color(0, 0, 0));
+		std::vector<Color> framebuffer(pixel_count, Color(0, 0, 0));
+		std::vector<unsigned char> preview_pixels;
+		const std::vector<RenderTile> tiles = build_tiles();
+		const int total_samples = sqrt_spp * sqrt_spp;
+
+		auto preview_start_time = std::chrono::steady_clock::now();
+		auto last_preview_update_time = preview_start_time;
+		if (preview)
+		{
+			preview_pixels.assign(pixel_count * 4, 0);
+			preview->UpdateProgressiveImage(preview_pixels, 0, total_samples, 0.0);
+		}
+
+		for (int sample_index = 0; sample_index < total_samples; ++sample_index)
+		{
+			auto render_tile_sample = [&](const RenderTile& tile)
+			{
+				for (int j = tile.y_begin; j < tile.y_end; j++)
+				{
+					for (int i = tile.x_begin; i < tile.x_end; i++)
+					{
+						const size_t framebuffer_index = static_cast<size_t>(j) * image_width + i;
+						accumulation[framebuffer_index] += sample_shader(i, j, sample_index);
+						framebuffer[framebuffer_index] =
+							accumulation[framebuffer_index] / static_cast<double>(sample_index + 1);
+					}
+				}
+			};
+
+			if (render_mode == Render_Mode::Parallel)
+				std::for_each(std::execution::par, tiles.begin(), tiles.end(), render_tile_sample);
+			else
+				std::for_each(tiles.begin(), tiles.end(), render_tile_sample);
+
+			auto now = std::chrono::steady_clock::now();
+			std::clog << "\rSamples: " << (sample_index + 1) << " / " << total_samples << ' ' << std::flush;
+
+			const bool is_first_sample = sample_index == 0;
+			const bool is_last_sample = (sample_index + 1) == total_samples;
+			const bool should_update_preview =
+				preview &&
+				!preview->IsClosed() &&
+				(is_first_sample ||
+				 is_last_sample ||
+				 std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033);
+
+			if (should_update_preview)
+			{
+				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+				copy_framebuffer_to_preview(framebuffer, preview_pixels);
+				preview->UpdateProgressiveImage(
+					preview_pixels,
+					sample_index + 1,
+					total_samples,
+					elapsed_seconds.count());
+				last_preview_update_time = now;
+			}
+		}
+
+		for (int j = 0; j < image_height; j++)
+		{
+			for (int i = 0; i < image_width; i++)
+			{
+				write_color(out, framebuffer[static_cast<size_t>(j) * image_width + i]);
+			}
+		}
+
+		std::clog << "\rDone.                 \n";
+	}
+
 	std::vector<RenderTile> build_tiles() const
 	{
 		// Split the whole image into small independent blocks for parallel scheduling.
@@ -270,6 +382,25 @@ private :
 	static int tile_height(const RenderTile& tile)
 	{
 		return tile.y_end - tile.y_begin;
+	}
+
+	void copy_framebuffer_to_preview(
+		const std::vector<Color>& framebuffer,
+		std::vector<unsigned char>& preview_pixels) const
+	{
+		const size_t pixel_count = static_cast<size_t>(image_width) * image_height;
+		if (preview_pixels.size() != pixel_count * 4)
+			preview_pixels.assign(pixel_count * 4, 0);
+
+		for (size_t index = 0; index < pixel_count; ++index)
+		{
+			const Color_Bytes bytes = to_color_bytes(framebuffer[index]);
+			const size_t pixel_index = index * 4;
+			preview_pixels[pixel_index + 0] = bytes.b;
+			preview_pixels[pixel_index + 1] = bytes.g;
+			preview_pixels[pixel_index + 2] = bytes.r;
+			preview_pixels[pixel_index + 3] = 255;
+		}
 	}
 
 	void blit_tile_preview(
@@ -337,7 +468,7 @@ private :
 		image_height = (image_height < 1) ? 1 : image_height;
 
 		// Stratified sampling uses a square grid, so only sqrt_spp * sqrt_spp samples are taken.
-		sqrt_spp = static_cast<int>(std::sqrt(sample_per_pixel));
+		sqrt_spp = std::max(1, static_cast<int>(std::sqrt(sample_per_pixel)));
 		recip_sqrt_spp = 1.0 / sqrt_spp;
 		pixel_sample_scale = 1.0 / (sqrt_spp * sqrt_spp);
 
