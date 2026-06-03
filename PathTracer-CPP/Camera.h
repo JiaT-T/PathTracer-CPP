@@ -562,10 +562,11 @@ private :
 		return background;
 	}
 
-	// Build a PDF for sampling light sources automatically,
+	// Build PDF for sampling light sources automatically,
 	// which can be a mixture of geometry-based sampling and environment-based sampling
 	std::shared_ptr<PDF> build_light_pdf(const Hittable& lights, const Point3& origin) const
 	{
+		// Get the geometry-based PDF for sampling the scene lights
 		auto p_geo = std::make_shared<Hittable_PDF>(lights, origin);
 
 		if (!environment)
@@ -579,6 +580,7 @@ private :
 
 		const double sum = env_power + geo_power;
 		double weight_geo = (sum > 0.0) ? (geo_power / sum) : 0.5;
+		// Clamp to avoid one of the PDFs being completely ignored
 		weight_geo = std::clamp(weight_geo, 0.05, 0.95);
 
 		return std::make_shared<Mixture_PDF>(p_geo, p_env, weight_geo);

@@ -163,6 +163,7 @@ private:
 	// VNDF sampling method for GGX distribution
 	Vector3 sample_visible_half_vector_local(const Vector3& v_local) const
 	{
+		// If the view direction is below the horizon, then there are no visible microfacets
 		if (v_local.z() <= 0)
 			return Vector3(0, 0, 1);
 
