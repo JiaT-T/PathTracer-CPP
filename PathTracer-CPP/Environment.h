@@ -194,8 +194,8 @@ private:
 		return normalize(Vector3(x, y, z));
 	}
 
-	// Precompute the sampling distribution for importance sampling during initialization.
-	// Two-level CDF: first pick a row, then pick a texel inside that row.
+	// Precompute the sampling distribution for importance sampling during initialization
+	// Two-level CDF: first pick a row, then pick a texel inside that row
 	void build_sampling_distribution()
 	{
 		width = image.width();
@@ -216,6 +216,7 @@ private:
 			double row_sum = 0.0;
 			for (int x = 0; x < width; x++)
 			{
+				// The weight of each texel
 				row_sum += texel_weight(x, y);
 				conditional_cdf[y][x] = row_sum; // CDF for x selection in row y
 			}

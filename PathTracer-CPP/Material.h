@@ -22,10 +22,17 @@ class Material
 public:
 	virtual ~Material() = default;
 
-	// Scatter chooses the next-ray sampling strategy. Eval and PDF must describe the same BSDF.
+	// Scatter chooses the next-ray sampling strategy
+	// It returns false if the ray should be absorbed and true if it should be scattered.
 	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const { return false; }
+
+	// Emitted returns the emitted radiance for a ray hitting the material. Default is no emission
 	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
+
+	// Eval evaluates the BRDF value for the given incoming and outgoing rays. Default is black (no reflection)
 	virtual Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return Color(0, 0, 0); }
+
+	// PDF evaluates the PDF value for the given incoming and outgoing rays. Default is 0 (no reflection)
 	virtual double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
 	virtual Vector3 ShadingNormal(const HitRecord& rec) const { return rec.n; }
 
