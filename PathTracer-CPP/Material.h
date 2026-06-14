@@ -46,6 +46,11 @@ public:
 	{
 		return 0.0;
 	}
+	// Returns material's original albedo
+	virtual Color Albedo(double u, double v, const Point3& p) const
+	{
+		return Color(1, 1, 1);
+	}
 };
 
 
@@ -78,6 +83,10 @@ public :
 		auto cos_theta = dot(rec.n, normalize(scattered.direction()));
 		return cos_theta <= 0 ? 0 : cos_theta / pi;
 	}
+	Color Albedo(double u, double v, const Point3& p) const override
+	{
+		return tex->value(u, v, p);
+	}
 
 private : 
 	std::shared_ptr<Texture> tex;
@@ -101,6 +110,10 @@ public :
 		s_rec.skip_pdf_ray = Ray(rec.p, reflected, ray_in.time());
 
 		return true;
+	}
+	Color Albedo(double u, double v, const Point3& p) const override
+	{
+		return albedo;
 	}
 
 private :
@@ -336,6 +349,11 @@ public :
 		const double preference = 0.15 + 0.55 * specular_weight + 0.20 * gloss_factor;
 
 		return std::clamp(preference, 0.1, 0.9);
+	}
+
+	Color Albedo(double u, double v, const Point3& p) const override
+	{
+		return base_tex->value(u, v, p);
 	}
 
 private:

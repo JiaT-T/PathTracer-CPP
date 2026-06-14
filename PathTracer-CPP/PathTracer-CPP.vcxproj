@@ -148,6 +148,7 @@
     <ClInclude Include="ONB.h" />
     <ClInclude Include="PDF.h" />
     <ClInclude Include="Perlin_Noise.h" />
+    <ClInclude Include="PostProcess.h" />
     <ClInclude Include="PPMPreviewWindow.h" />
     <ClInclude Include="Quad.h" />
     <ClInclude Include="Ray.h" />
