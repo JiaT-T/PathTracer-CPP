@@ -14,6 +14,7 @@
 #include "PDF.h"
 #include "PPMPreviewWindow.h"
 #include "Environment.h"
+#include "PostProcess.h"
 
 static double power_heuristic(double pdf_a, double pdf_b)
 {
@@ -118,6 +119,10 @@ public :
 				Ray r = get_ray(i, j, s_i, s_j);
 				return ray_color(r, max_depth, world);
 			},
+			[&](int i, int j)
+			{
+				return trace_pixel_data(get_center_ray(i, j), world);
+			},
 			preview);
 	}
 
@@ -130,6 +135,10 @@ public :
 				const int s_j = sample_index / sqrt_spp;
 				Ray r = get_ray(i, j, s_i, s_j);
 				return ray_color(r, max_depth, world, lights);
+			},
+			[&](int i, int j)
+			{
+				return trace_pixel_data(get_center_ray(i, j), world);
 			},
 			preview);
 	}
@@ -266,8 +275,11 @@ private :
 		std::clog << "\rDone.                 \n";
 	}
 
-	template <typename SampleShader>
-	void render_progressive_impl(SampleShader&& sample_shader, PPMPreviewWindow* preview)
+	template <typename SampleShader, typename GuideShader>
+	void render_progressive_impl(
+		SampleShader&& sample_shader,
+		GuideShader&& guide_shader,
+		PPMPreviewWindow* preview)
 	{
 		initialize();
 
@@ -286,6 +298,10 @@ private :
 		std::vector<unsigned char> preview_pixels;
 		const std::vector<RenderTile> tiles = build_tiles();
 		const int total_samples = sqrt_spp * sqrt_spp;
+
+		std::vector<PixelGuide> guide_buffer(pixel_count);
+		std::vector<Color> filtered_framebuffer(pixel_count);
+		const AtrousDenoiser preview_denoiser;
 
 		auto preview_start_time = std::chrono::steady_clock::now();
 		auto last_preview_update_time = preview_start_time;
@@ -307,6 +323,9 @@ private :
 						accumulation[framebuffer_index] += sample_shader(i, j, sample_index);
 						framebuffer[framebuffer_index] =
 							accumulation[framebuffer_index] / static_cast<double>(sample_index + 1);
+						if (sample_index == 0)
+							guide_buffer[framebuffer_index] = guide_shader(i, j);
+						guide_buffer[framebuffer_index].sample_count = sample_index + 1;
 					}
 				}
 			};
@@ -339,6 +358,26 @@ private :
 					elapsed_seconds.count());
 				last_preview_update_time = now;
 			}
+		}
+
+		if (preview && !preview->IsClosed())
+		{
+			auto now = std::chrono::steady_clock::now();
+			std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+			PostProcessInput post_input{
+				framebuffer,
+				guide_buffer,
+				image_width,
+				image_height
+			};
+			PostProcessOutput post_output{ filtered_framebuffer };
+			preview_denoiser.Apply(post_input, post_output);
+			copy_framebuffer_to_preview(filtered_framebuffer, preview_pixels);
+			preview->UpdateProgressiveImage(
+				preview_pixels,
+				total_samples,
+				total_samples,
+				elapsed_seconds.count());
 		}
 
 		for (int j = 0; j < image_height; j++)
@@ -829,5 +868,34 @@ private :
 			light_rec.u,
 			light_rec.v,
 			light_rec.p);
+	}
+
+	Ray get_center_ray(int i, int j) const
+	{
+		auto pixel_sample =
+			pixel00_center +
+			i * pixel_delta_u +
+			j * pixel_delta_v;
+
+		auto ray_origin = camera_center;
+		auto ray_direction = pixel_sample - ray_origin;
+
+		return Ray(ray_origin, ray_direction, 0.0);
+	}
+	PixelGuide trace_pixel_data(const Ray& ray, const Hittable& world) const
+	{
+		PixelGuide data;
+
+		HitRecord rec;
+		if (!world.Hit(ray, Interval(0.001, infinity), rec))
+			return data;
+
+		data.valid = true;
+		data.normal = normalize(rec.geo_n);
+		data.depth = rec.t;
+		data.sample_count = 1;
+		data.albedo = rec.mat ? rec.mat->Albedo(rec.u, rec.v, rec.p) : Color(1, 1, 1);
+
+		return data;
 	}
 };

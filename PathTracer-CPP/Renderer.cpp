@@ -1145,7 +1145,7 @@ void README_Showcase()
 	Camera cam;
 	cam.aspect_ratio = 16.0 / 9.0;
 	cam.image_width = 1280;
-	cam.sample_per_pixel = 700;
+	cam.sample_per_pixel = 300;
 	cam.max_depth = 25;
 	cam.vfov = 27;
 	cam.lookfrom = Point3(0.0, 1.55, 12.3);
