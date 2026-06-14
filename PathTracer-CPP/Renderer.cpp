@@ -14,6 +14,11 @@
 #include "Triangle.h"
 #include "ObjLoader.h"
 
+namespace
+{
+	constexpr bool kKeepPreviewOpenAfterRender = false;
+}
+
 void Bouncing_Spheres();
 void Checker_Spheres();
 void Earth();
@@ -41,7 +46,8 @@ void RenderAndPreview(Camera& cam, const Hittable& world)
 	cam.RenderProgressive(world, &preview);
 	const double render_seconds = timer.stop();
 	preview.SetFinished(render_seconds);
-	preview.WaitUntilClosed();
+	if (kKeepPreviewOpenAfterRender)
+		preview.WaitUntilClosed();
 }
 void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights)
 {
@@ -50,7 +56,8 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 	cam.RenderProgressive(world, lights, &preview);
 	const double render_seconds = timer.stop();
 	preview.SetFinished(render_seconds);
-	preview.WaitUntilClosed();
+	if (kKeepPreviewOpenAfterRender)
+		preview.WaitUntilClosed();
 }
 
 int main()
@@ -1145,7 +1152,7 @@ void README_Showcase()
 	Camera cam;
 	cam.aspect_ratio = 16.0 / 9.0;
 	cam.image_width = 1280;
-	cam.sample_per_pixel = 300;
+	cam.sample_per_pixel = 1000;
 	cam.max_depth = 25;
 	cam.vfov = 27;
 	cam.lookfrom = Point3(0.0, 1.55, 12.3);

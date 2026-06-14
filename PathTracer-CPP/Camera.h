@@ -41,6 +41,13 @@ public :
 		Parallel
 	};
 
+	enum class Progressive_Output_Mode
+	{
+		Raw,
+		Denoised,
+		Denoised_With_Raw
+	};
+
 	// Image
 	double aspect_ratio     = 16.0 / 9.0;
 	int    image_width      = 400;
@@ -49,6 +56,7 @@ public :
 	Color  background;
 	std::string output_filename = "image.ppm";
 	Render_Mode render_mode = Render_Mode::Parallel;
+	Progressive_Output_Mode progressive_output_mode = Progressive_Output_Mode::Denoised;
 
 	double  vfov     = 90;
 	Vector3 lookfrom = Point3(0, 0, 0);
@@ -283,14 +291,15 @@ private :
 	{
 		initialize();
 
-		std::ofstream out(output_filename);
-		if (!out.is_open())
-		{
-			std::cerr << "Error: Cannot open file.\n";
+		if (!can_open_output_file(output_filename))
 			return;
-		}
 
-		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+		const bool writes_raw_sidecar =
+			progressive_output_mode == Progressive_Output_Mode::Denoised_With_Raw;
+		const std::string raw_output_filename =
+			add_filename_suffix(output_filename, "_raw");
+		if (writes_raw_sidecar && !can_open_output_file(raw_output_filename))
+			return;
 
 		const size_t pixel_count = static_cast<size_t>(image_width) * image_height;
 		std::vector<Color> accumulation(pixel_count, Color(0, 0, 0));
@@ -360,10 +369,13 @@ private :
 			}
 		}
 
-		if (preview && !preview->IsClosed())
+		const bool writes_denoised_output =
+			progressive_output_mode != Progressive_Output_Mode::Raw;
+		const bool needs_filtered_framebuffer =
+			writes_denoised_output || (preview && !preview->IsClosed());
+
+		if (needs_filtered_framebuffer)
 		{
-			auto now = std::chrono::steady_clock::now();
-			std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
 			PostProcessInput post_input{
 				framebuffer,
 				guide_buffer,
@@ -372,7 +384,15 @@ private :
 			};
 			PostProcessOutput post_output{ filtered_framebuffer };
 			preview_denoiser.Apply(post_input, post_output);
-			copy_framebuffer_to_preview(filtered_framebuffer, preview_pixels);
+		}
+
+		if (preview && !preview->IsClosed())
+		{
+			auto now = std::chrono::steady_clock::now();
+			std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
+			const std::vector<Color>& preview_framebuffer =
+				needs_filtered_framebuffer ? filtered_framebuffer : framebuffer;
+			copy_framebuffer_to_preview(preview_framebuffer, preview_pixels);
 			preview->UpdateProgressiveImage(
 				preview_pixels,
 				total_samples,
@@ -380,13 +400,11 @@ private :
 				elapsed_seconds.count());
 		}
 
-		for (int j = 0; j < image_height; j++)
-		{
-			for (int i = 0; i < image_width; i++)
-			{
-				write_color(out, framebuffer[static_cast<size_t>(j) * image_width + i]);
-			}
-		}
+		const std::vector<Color>& output_framebuffer =
+			writes_denoised_output ? filtered_framebuffer : framebuffer;
+		if (writes_raw_sidecar)
+			write_framebuffer_to_file(raw_output_filename, framebuffer);
+		write_framebuffer_to_file(output_filename, output_framebuffer);
 
 		std::clog << "\rDone.                 \n";
 	}
@@ -421,6 +439,55 @@ private :
 	static int tile_height(const RenderTile& tile)
 	{
 		return tile.y_end - tile.y_begin;
+	}
+
+	bool can_open_output_file(const std::string& filename) const
+	{
+		std::ofstream out(filename);
+		if (!out.is_open())
+		{
+			std::cerr << "Error: Cannot open file: " << filename << "\n";
+			return false;
+		}
+
+		return true;
+	}
+
+	void write_framebuffer_to_file(
+		const std::string& filename,
+		const std::vector<Color>& framebuffer) const
+	{
+		std::ofstream out(filename);
+		if (!out.is_open())
+		{
+			std::cerr << "Error: Cannot open file: " << filename << "\n";
+			return;
+		}
+
+		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
+		for (int j = 0; j < image_height; j++)
+		{
+			for (int i = 0; i < image_width; i++)
+			{
+				write_color(out, framebuffer[static_cast<size_t>(j) * image_width + i]);
+			}
+		}
+	}
+
+	static std::string add_filename_suffix(
+		const std::string& filename,
+		const std::string& suffix)
+	{
+		const size_t slash = filename.find_last_of("/\\");
+		const size_t dot = filename.find_last_of('.');
+		const bool has_extension =
+			dot != std::string::npos &&
+			(slash == std::string::npos || dot > slash);
+
+		if (!has_extension)
+			return filename + suffix;
+
+		return filename.substr(0, dot) + suffix + filename.substr(dot);
 	}
 
 	void copy_framebuffer_to_preview(

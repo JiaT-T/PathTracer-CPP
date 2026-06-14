@@ -1,6 +1,6 @@
 # PathTracer-CPP
 
-`PathTracer-CPP` 是一个使用 `C++20` 编写的 CPU 路径追踪器学习项目。项目最初参考了 [Ray Tracing in One Weekend](https://raytracing.github.io/) 系列教程，并在此基础上逐步扩展出三角形网格、OBJ/MTL 资产加载、PBR 材质、GGX/VNDF 采样、IBL、MIS、体积散射与并行 tile 渲染。
+`PathTracer-CPP` 是一个使用 `C++20` 编写的 CPU 路径追踪器学习项目。项目最初参考了 [Ray Tracing in One Weekend](https://raytracing.github.io/) 系列教程，并在此基础上逐步扩展出三角形网格、OBJ/MTL 资产加载、PBR 材质、GGX/VNDF 采样、IBL、MIS、体积散射、渐进式预览、后处理降噪与并行 tile 渲染。
 
 仓库地址：[JiaT-T/PathTracer-CPP](https://github.com/JiaT-T/PathTracer-CPP)
 
@@ -19,6 +19,7 @@
 - 玻璃、传统金属、程序纹理、贴图纹理
 - 常量密度体积散射
 - 景深
+- 渐进式预览与最终 denoised 输出
 
 ## 当前能力
 
@@ -31,7 +32,9 @@
 - 纹理：`Solid_Color`、`Checker_Texture`、`Image_Texture`、`Noise_Texture`
 - 体积：`Constant_Medium`
 - 相机：景深、运动模糊
-- 预览：实时 PPM 预览窗口
+- 预览：基于 accumulation framebuffer 的 progressive rendering 预览窗口
+- 后处理：基于 `albedo / normal / depth` guide buffer 的 A-Trous 风格 denoise
+- 输出：progressive 渲染支持 raw / denoised / denoised + raw sidecar 输出模式
 - 并行：基于 `std::execution::par` 的 tile 分块渲染
 
 ### PBR / IBL / MIS
@@ -62,6 +65,17 @@
 - 三角形 `TBN` 构建
 - tangent-space normal map
 - OpenGL / DirectX 法线贴图约定切换
+
+### Progressive Preview / Post Process
+
+当前 progressive 渲染路径位于 `Camera::RenderProgressive()` 与 `render_progressive_impl()`：
+
+- 每轮 sample 更新一次 accumulation framebuffer，预览窗口显示原始采样逐步收敛过程
+- 首次 sample 生成 `PixelGuide`，记录 `albedo`、`normal`、`depth` 与 `sample_count`
+- `PostProcess.h` 中定义 `PostProcess` 基类与 `AtrousDenoiser`
+- A-Trous 风格滤波使用 guide buffer、原始颜色差异与深度 / 法线权重限制跨边界扩散
+- 后处理只在所有 sample 完成后执行一次，再替换预览窗口中的最终图像
+- `Camera::progressive_output_mode` 控制最终写出 raw、denoised，或同时写出 denoised 与 `*_raw.ppm`
 
 ## 代表性场景
 
@@ -99,7 +113,8 @@
 
 输出文件：
 
-- `readme_showcase.ppm`
+- `readme_showcase.ppm`：默认写出 denoised 最终图像
+- `readme_showcase_raw.ppm`：当 `progressive_output_mode` 使用 `Denoised_With_Raw` 时额外写出
 
 ## Benchmark
 
@@ -145,8 +160,10 @@
 ### 输出说明
 
 - 渲染结果会写入 `Camera::output_filename` 指定文件
+- progressive 渲染默认写出 denoised 最终图像
+- 如需保留原始采样结果，可将 `Camera::progressive_output_mode` 设为 `Raw` 或 `Denoised_With_Raw`
 - 控制台会输出进度和总渲染时间
-- 渲染过程中会弹出实时预览窗口
+- 渲染过程中会弹出实时预览窗口，渲染完成后显示最终后处理结果
 
 ## 资源与纹理
 
@@ -180,12 +197,14 @@ OBJ 加载时会优先在模型目录内查找 `.mtl` 及其关联贴图。
   - subsurface
   - sheen
 - 还没有 EXR / HDR 输出链路
+- 当前 denoise 是基于 guide buffer 的空间滤波，还没有 variance / history buffer
 
 ## 后续方向
 
 下一阶段更值得继续推进的是：
 
-1. 继续优化第一跳 direct-lighting 采样预算
-2. 处理 normal map 的黑槽 / shadow terminator 问题
-3. 为大场景资产补 triangulation 与 alpha cutout
-4. 再考虑更复杂材质层与更高质量输出格式
+1. 为 denoise 增加 variance buffer 与 debug buffer 可视化
+2. 继续优化第一跳 direct-lighting 采样预算
+3. 处理 normal map 的黑槽 / shadow terminator 问题
+4. 为大场景资产补 triangulation 与 alpha cutout
+5. 再考虑更复杂材质层与更高质量输出格式
