@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -48,6 +49,7 @@ namespace
 			"  --no-preview            Do not open the Win32 preview window\n"
 			"  --keep-preview          Keep the preview window open after rendering\n"
 			"  --list                  List scenes\n"
+			"  --image-stats <file>    Per-channel statistics of an image's encoded values\n"
 			"\n"
 			"Validation:\n"
 			"  --test [filter]         Numerical unit tests (PDF, BSDF, furnace, determinism)\n"
@@ -64,6 +66,38 @@ namespace
 		const uint64_t lo = static_cast<uint64_t>(rd());
 		const uint64_t t = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
 		return (hi | lo) ^ rng::splitmix64(t);
+	}
+
+	// Per-channel statistics of the raw encoded values of an image (no color-space decoding),
+	// used for asset review (e.g. is a roughness map really roughness, or glossiness?).
+	int image_stats_command(const std::string& path)
+	{
+		const rtw_image image(path.c_str());
+		if (!image.is_valid())
+			return 2;
+		const int w = image.width();
+		const int h = image.height();
+		std::vector<std::vector<double>> channels(3);
+		for (auto& c : channels) c.reserve(static_cast<size_t>(w) * h);
+		for (int y = 0; y < h; ++y)
+			for (int x = 0; x < w; ++x)
+			{
+				const Color c = image.float_pixel(x, y);
+				for (int k = 0; k < 3; ++k) channels[k].push_back(c[k]);
+			}
+		std::cout << path << "  " << w << "x" << h << "\n";
+		const char* names[3] = { "R", "G", "B" };
+		for (int k = 0; k < 3; ++k)
+		{
+			auto& v = channels[k];
+			double sum = 0.0;
+			for (double x : v) sum += x;
+			std::sort(v.begin(), v.end());
+			auto pct = [&](double p) { return v[static_cast<size_t>(p * (v.size() - 1))]; };
+			std::cout << "  " << names[k] << ": mean " << sum / v.size() << "  min " << v.front()
+				<< "  p5 " << pct(0.05) << "  p50 " << pct(0.5) << "  p95 " << pct(0.95) << "  max " << v.back() << "\n";
+		}
+		return 0;
 	}
 
 	void list_scenes()
@@ -106,6 +140,16 @@ namespace
 			<< "  seed " << seed
 			<< "  threads " << (options.threads > 0 ? std::to_string(options.threads) : std::string("all"))
 			<< "\n";
+
+		if (scene.use_lights)
+		{
+			// Debug output for the light-selection heuristic, evaluated at the camera target.
+			const Vector3 up(0, 1, 0);
+			const auto probs = cam.DescribeLightSelection(scene.lights, cam.lookat, &up);
+			std::clog << "Light selection at lookat (normal +Y): environment " << probs.env
+				<< ", geometry lights " << probs.total_geo
+				<< " (" << probs.count << " light" << (probs.count == 1 ? "" : "s") << ")\n";
+		}
 
 		std::unique_ptr<PPMPreviewWindow> preview;
 		if (options.preview)
@@ -154,6 +198,7 @@ int main(int argc, char** argv)
 
 		if (a == "--help" || a == "-h") command = Command::Help;
 		else if (a == "--list") command = Command::List;
+		else if (a == "--image-stats") return image_stats_command(next("--image-stats"));
 		else if (a == "--test")
 		{
 			command = Command::Test;

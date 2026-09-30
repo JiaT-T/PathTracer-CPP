@@ -26,6 +26,8 @@
 #include "ImageIO.h"
 #include "Scenes.h"
 #include "Parallel.h"
+#include "LightSampler.h"
+#include "Hittable_List.h"
 
 // ============================================================================================
 // Minimal test harness
@@ -643,6 +645,94 @@ namespace
 		run(sphere, "Sphere light", 2.0 * pi * (1.0 - std::sqrt(1.0 - 0.49 / d2)));
 	}
 
+	void test_light_sampler()
+	{
+		std::cout << "\n[light] light selection mixture (LightSampler)\n";
+		rng::seed_thread(14);
+		auto emissive = std::make_shared<Diffuse_Light>(Color(16, 15, 14));
+		// README_Showcase-like configuration: one downward-facing area light + HDR environment.
+		Hittable_List lights;
+		lights.add(std::make_shared<Quad>(Point3(-4.0, 6.0, 2.8), Vector3(8.0, 0.0, 0.0), Vector3(0.0, 0.0, 3.8), emissive));
+		lights.add(std::make_shared<Sphere>(Point3(3.0, 3.0, -1.0), 0.5, emissive));
+		const LatLong_Environment env("images/HDR/suburban_garden_2k.hdr", 1.35, 0.0, false);
+
+		LightSampler sampler;
+		sampler.build(&lights, &env);
+		const Point3 p(0.0, 0.18, 0.8);
+		const Vector3 n(0, 1, 0);
+		const LightSampler::Probabilities probs = sampler.probabilities(p, &n);
+		const double sum = probs.env + probs.total_geo;
+		check(std::abs(sum - 1.0) < 1e-12, "selection probabilities sum to 1",
+			"env=" + fmt(probs.env, 4) + " geo=" + fmt(probs.total_geo, 4));
+		check(probs.total_geo > 0.3 && probs.total_geo < 0.9,
+			"area light gets a substantial share (was clamped to 0.05 before)", "geo=" + fmt(probs.total_geo, 4));
+		std::cout << "  environment integral of luminance = " << fmt(env.integrated_luminance(), 4) << "\n";
+
+		// The mixture density must integrate to 1 and match what sample() produces.
+		const int N = 2000000;
+		double s = 0.0, s2 = 0.0;
+		for (int i = 0; i < N; ++i)
+		{
+			const double x = 4.0 * pi * sampler.pdf(probs, p, random_unit_vector());
+			s += x; s2 += x * x;
+		}
+		const double mean = s / N;
+		const double sigma = std::sqrt(std::max(0.0, s2 / N - mean * mean) / N);
+		check(std::abs(mean - 1.0) < 4.0 * sigma + 2e-3, "light mixture pdf integrates to 1", "integral=" + fmt(mean) + " +- " + fmt(sigma));
+
+		// Sample/pdf consistency of the mixture: if directions really follow p_mix, then for every
+		// component density p_k, E_{w ~ p_mix}[p_k(w) / p_mix(w)] = integral p_k = 1. A wrong
+		// selection probability or a pdf missing a factor breaks at least one of these.
+		// (A binned chi2 is not used here: the cone / quad / texel discontinuities make the
+		// expected bin counts too inaccurate at 2M samples.)
+		{
+			const int M = 1000000;
+			double r_env = 0.0, r_quad = 0.0, r_sphere = 0.0;
+			double q_env = 0.0, q_quad = 0.0, q_sphere = 0.0;
+			for (int i = 0; i < M; ++i)
+			{
+				Vector3 w;
+				if (!sampler.sample(probs, p, w))
+					continue;
+				const double pm = sampler.pdf(probs, p, w);
+				if (pm <= 0.0)
+					continue;
+				const double a = env.pdf_value(w) / pm;
+				const double b = lights.objects[0]->pdf_value(p, w) / pm;
+				const double c = lights.objects[1]->pdf_value(p, w) / pm;
+				r_env += a; q_env += a * a;
+				r_quad += b; q_quad += b * b;
+				r_sphere += c; q_sphere += c * c;
+			}
+			auto report = [&](double sum, double sum2, const std::string& name)
+			{
+				const double mean = sum / M;
+				const double sigma = std::sqrt(std::max(0.0, sum2 / M - mean * mean) / M);
+				check(std::abs(mean - 1.0) < 4.0 * sigma + 2e-3, "E_mix[p_" + name + " / p_mix] = 1",
+					"value=" + fmt(mean) + " +- " + fmt(sigma));
+			};
+			report(r_env, q_env, "env");
+			report(r_quad, q_quad, "quad");
+			report(r_sphere, q_sphere, "sphere");
+		}
+
+		// Point behind the one-sided area light: its probability must be exactly 0.
+		const Point3 above(0.0, 8.0, 4.0);
+		const LightSampler::Probabilities behind = sampler.probabilities(above, &n);
+		check(behind.geo[0] == 0.0, "one-sided light seen from behind gets probability 0");
+
+		// No lights, no environment: nothing to sample.
+		LightSampler none;
+		Hittable_List empty;
+		none.build(&empty, nullptr);
+		check(!none.probabilities(p, &n).any, "empty light list -> NEE disabled (no fake (1,0,0) direction, Audit M2)");
+
+		// Environment only: probability 1.
+		LightSampler env_only;
+		env_only.build(&empty, &env);
+		check(std::abs(env_only.probabilities(p, &n).env - 1.0) < 1e-12, "environment-only scene -> P(env) = 1");
+	}
+
 	void test_bsdf()
 	{
 		std::cout << "\n[bsdf] Lambert / phase function\n";
@@ -807,6 +897,7 @@ int run_unit_tests(const std::string& filter)
 		{ "pdf", test_pdf_normalization },
 		{ "environment", test_environment_pdf },
 		{ "light", test_light_pdf },
+		{ "lightsampler", test_light_sampler },
 		{ "bsdf", test_bsdf },
 		{ "texture", test_texture_decode },
 		{ "determinism", test_determinism },

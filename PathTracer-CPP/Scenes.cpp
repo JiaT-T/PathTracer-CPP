@@ -324,10 +324,12 @@ namespace
 		auto glass = std::make_shared<Dielectric>(1.5);
 		world.add(make_shared<Sphere>(Point3(190, 90, 190), 90, glass));
 
+		// Only emitters belong in the NEE light list. The RTIOW book also added the glass sphere
+		// here, but a shadow ray towards glass returns emitted = 0, so that wasted half of the
+		// light samples and diluted the MIS weights (Audit M10).
 		auto empty_material = std::shared_ptr<Material>();
 		Hittable_List lights;
 		lights.add(make_shared<Quad>(Point3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), empty_material));
-		lights.add(make_shared<Sphere>(Point3(190, 90, 190), 90, empty_material));
 
 		world = Hittable_List(std::make_shared<BVH_Node>(world));
 

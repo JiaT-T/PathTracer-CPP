@@ -5,6 +5,7 @@
 #include "Hittable.h"
 #include "Environment.h"
 #include "Microfacet.h"
+#include "LightSampler.h"
 
 class PDF
 {
@@ -150,6 +151,35 @@ private:
 	Vector3 view_dir;
 	double roughness;
 	double alpha;
+};
+
+// Light-selection mixture at one shading point (see LightSampler.h).
+class Light_Mixture_PDF : public PDF
+{
+public:
+	Light_Mixture_PDF(const LightSampler& sampler, const Point3& origin, const Vector3* normal)
+		: sampler(sampler), origin(origin), probs(sampler.probabilities(origin, normal)) {}
+
+	bool available() const { return probs.any; }
+
+	double value(const Vector3& dir) const override
+	{
+		return sampler.pdf(probs, origin, dir);
+	}
+
+	Vector3 generate() const override
+	{
+		Vector3 dir(0, 1, 0);
+		sampler.sample(probs, origin, dir);
+		return dir;
+	}
+
+	const LightSampler::Probabilities& probabilities() const { return probs; }
+
+private:
+	const LightSampler& sampler;
+	Point3 origin;
+	LightSampler::Probabilities probs;
 };
 
 class Environment_PDF : public PDF

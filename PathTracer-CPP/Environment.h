@@ -17,7 +17,9 @@ public:
 	virtual Color radiance(const Vector3& dir) const = 0;
 	virtual double pdf_value(const Vector3& dir) const = 0;
 	virtual Vector3 random() const = 0;
-	virtual double sampling_power_estimate() const = 0;
+	// Integral of luminance(L(w)) over the full sphere of directions. Resolution independent;
+	// used by LightSampler to compare the environment with geometry lights (same units).
+	virtual double integrated_luminance() const = 0;
 };
 
 // Uniform radiance from every direction. Used by white-furnace tests, where a convex white
@@ -30,7 +32,7 @@ public:
 	Color radiance(const Vector3&) const override { return L; }
 	double pdf_value(const Vector3&) const override { return 1.0 / (4.0 * pi); }
 	Vector3 random() const override { return random_unit_vector(); }
-	double sampling_power_estimate() const override
+	double integrated_luminance() const override
 	{
 		return (0.2126 * L.x() + 0.7152 * L.y() + 0.0722 * L.z()) * 4.0 * pi;
 	}
@@ -112,10 +114,15 @@ public:
 		return uv_to_direction(u, v);
 	}
 
-	// Rough power estimate used to mix environment sampling with geometry-light sampling.
-	double sampling_power_estimate() const override
+	// total_weight = sum over texels of lum * sin(theta); a texel covers
+	// 2 pi^2 sin(theta) / (W H) steradians, so integral L dw = intensity * total_weight * 2 pi^2 / (W H).
+	// (The previous estimate returned intensity * total_weight, a pixel sum that grows with the
+	// texture resolution and cannot be compared with geometry lights.)
+	double integrated_luminance() const override
 	{
-		return intensity * total_weight;
+		if (width <= 0 || height <= 0)
+			return 0.0;
+		return intensity * total_weight * 2.0 * pi * pi / (static_cast<double>(width) * static_cast<double>(height));
 	}
 
 private:

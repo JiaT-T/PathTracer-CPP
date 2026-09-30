@@ -1,6 +1,8 @@
 #pragma once
 #include "ONB.h"
 #include "Hittable.h"
+#include "Material.h"
+
 class Sphere : public Hittable
 {
 public :
@@ -60,9 +62,12 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
-	void get_sphere_uv(const Point3& p, double& u, double& v) const
+	// p is a point on the unit sphere. u = phi / 2pi, v = theta / pi with
+	// theta = acos(-y), phi = atan2(-z, x) + pi, i.e.
+	//   p(u, v) = (-sin(theta) cos(phi), -cos(theta), sin(theta) sin(phi)).
+	static void get_sphere_uv(const Point3& p, double& u, double& v)
 	{
-		auto theta = std::acos(-p.y());
+		auto theta = std::acos(std::clamp(-p.y(), -1.0, 1.0));
 		auto phi = std::atan2(-p.z(), p.x()) + pi;
 		u = phi / (2.0 * pi);
 		v = theta / pi;
@@ -70,10 +75,15 @@ public :
 
 	double pdf_value(const Point3& origin, const Vector3& direction) const override
 	{
+		// The cone sampling below is undefined for an origin inside the sphere (sqrt of a
+		// negative number); such points cannot see the emitting outer surface anyway.
+		auto squared_distanced = (center.at(0) - origin).length_squared();
+		if (squared_distanced <= radius * radius)
+			return 0.0;
+
 		HitRecord rec;
 		if (!this->Hit(Ray(origin, direction), Interval(0.001, infinity), rec)) return 0;
 
-		auto squared_distanced = (center.at(0) - origin).length_squared();
 		auto max_cosine_theta = std::sqrt(1 - radius * radius / squared_distanced);
 		auto solid_angle = 2.0 * pi * (1.0 - max_cosine_theta);
 
@@ -84,9 +94,22 @@ public :
 	{
 		Vector3 dir = center.at(0) - origin;
 		double squared_distanced = dir.length_squared();
+		if (squared_distanced <= radius * radius)
+			return Vector3(0, 1, 0); // pdf_value() is 0 here, the sample is discarded
 		ONB uvw(dir);
 
 		return uvw.transform(random_to_sphere(radius, squared_distanced));
+	}
+
+	bool light_shape_info(LightShapeInfo& info) const override
+	{
+		info.shape = LightShapeInfo::Shape::Sphere;
+		info.center = center.at(0);
+		info.radius = radius;
+		info.area = 4.0 * pi * radius * radius;
+		info.normal = Vector3(0, 0, 0);
+		info.luminance = mat ? mat->EmissionLuminance(0.5, 0.5, info.center) : 0.0;
+		return true;
 	}
 
 private :

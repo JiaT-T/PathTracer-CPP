@@ -33,17 +33,31 @@ public :
 	}
 };
 
+// Geometry summary of an emitter, used by LightSampler to estimate how much a light
+// contributes at a shading point (selection probability only; never used for radiance).
+struct LightShapeInfo
+{
+	enum class Shape { Planar, Sphere };
+	Shape shape = Shape::Planar;
+	Point3 center;
+	Vector3 normal;          // Planar: emitting side (front face) normal
+	double area = 0.0;
+	double radius = 0.0;     // Sphere
+	double luminance = 0.0;  // emitted luminance (0 = not an emitter)
+};
+
 class Hittable
 {
 public : 
 	virtual ~Hittable() = default;
 	virtual bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const = 0;
 	virtual AABB bounding_box() const = 0;
+	// Solid-angle pdf of random(origin) for `direction`. Only primitives that implement
+	// light_shape_info() can be sampled as lights.
 	virtual double pdf_value(const Point3& origin, const Vector3& direction) const { return 0.0; }
 	virtual Vector3 random(const Point3& origin) const { return Vector3(1.0, 0.0, 0.0); } 
-	// Returns the estimated power of the light emitted from the hittable, 
-	// which is used for importance sampling of light sources
-	virtual double sampling_power_estimate() const { return 0.0; }
+	// Returns false if this object cannot be sampled as a light (e.g. transform wrappers).
+	virtual bool light_shape_info(LightShapeInfo& info) const { return false; }
 };
 
 class Translation : public Hittable
@@ -68,12 +82,6 @@ public :
 	}
 
 	AABB bounding_box() const override { return bbox; }
-
-	double sampling_power_estimate() const override
-	{
-		return object->sampling_power_estimate();
-	}
-
 
 private :
 	std::shared_ptr<Hittable> object;
@@ -172,12 +180,6 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
-	double sampling_power_estimate() const override
-	{
-		return object->sampling_power_estimate();
-	}
-
-
 private :
 	std::shared_ptr<Hittable> object;
 	double sin_theta;
@@ -239,20 +241,6 @@ public:
 	}
 
 	AABB bounding_box() const override { return bbox; }
-
-	double sampling_power_estimate() const override
-	{
-		const double sx = std::abs(scale.x());
-		const double sy = std::abs(scale.y());
-		const double sz = std::abs(scale.z());
-
-		// A similar approach to the surface area scaling factor for a scaled sphere,
-		// which is proportional to the average of the products of the scale factors along each pair of axes.
-		const double area_scale = (sx * sy + sy * sz + sz * sx) / 3.0;
-
-		return object->sampling_power_estimate() * area_scale;
-	}
-
 
 private:
 	std::shared_ptr<Hittable> object;

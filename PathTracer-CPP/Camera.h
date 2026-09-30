@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Hittable.h"
+#include "Hittable_List.h"
 #include "My_Common.h"
 #include "Material.h"
 #include "PDF.h"
@@ -88,6 +89,15 @@ public :
 
 	const std::shared_ptr<Environment>& GetEnvironment() const { return environment; }
 
+	// Debug: light-selection probabilities (environment / total geometry) at point p.
+	// normal = nullptr evaluates the volume-scattering case.
+	LightSampler::Probabilities DescribeLightSelection(const Hittable_List& lights, const Point3& p, const Vector3* normal) const
+	{
+		LightSampler sampler;
+		sampler.build(&lights, environment.get());
+		return sampler.probabilities(p, normal);
+	}
+
 	// Results of the most recent render (linear HDR, row-major, top row first).
 	const std::vector<Color>& LastFramebuffer() const { return framebuffer; }
 	const std::vector<Color>& LastDenoised() const { return filtered_framebuffer; }
@@ -106,8 +116,9 @@ public :
 	}
 
 	// Ver.2: next-event estimation towards `lights` (+ environment) with MIS.
-	void Render(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
+	void Render(const Hittable_List& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
 	{
+		light_sampler.build(&lights, environment.get());
 		render_image(
 			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world, lights); },
 			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
@@ -124,8 +135,9 @@ public :
 			true);
 	}
 
-	void RenderProgressive(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
+	void RenderProgressive(const Hittable_List& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
 	{
+		light_sampler.build(&lights, environment.get());
 		render_image(
 			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world, lights); },
 			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
@@ -395,6 +407,7 @@ private :
 	Vector3   defocus_disk_v;   // Defocus disk vertical radius
 
 	std::shared_ptr<Environment> environment = nullptr;
+	LightSampler light_sampler;
 
 	void initialize()
 	{
@@ -509,28 +522,16 @@ private :
 		return background;
 	}
 
-	// Build PDF for sampling light sources automatically,
-	// which can be a mixture of geometry-based sampling and environment-based sampling
-	std::shared_ptr<PDF> build_light_pdf(const Hittable& lights, const Point3& origin) const
+	// Light-selection mixture (geometry lights + environment) at a shading point.
+	// Returns nullptr when no light strategy can contribute; NEE is then skipped and the BSDF
+	// sample alone carries direct lighting with MIS weight 1.
+	std::shared_ptr<PDF> build_light_pdf(const Point3& origin, const Scattered_Record& s_rec) const
 	{
-		// Get the geometry-based PDF for sampling the scene lights
-		auto p_geo = std::make_shared<Hittable_PDF>(lights, origin);
-
-		if (!environment)
-			return p_geo;
-
-		// Mix scene lights and environment map by estimated power, useful for IBL scenes.
-		auto p_env = std::make_shared<Environment_PDF>(*environment);
-
-		const double env_power = environment->sampling_power_estimate();
-		const double geo_power = lights.sampling_power_estimate();
-
-		const double sum = env_power + geo_power;
-		double weight_geo = (sum > 0.0) ? (geo_power / sum) : 0.5;
-		// Clamp to avoid one of the PDFs being completely ignored
-		weight_geo = std::clamp(weight_geo, 0.05, 0.95);
-
-		return std::make_shared<Mixture_PDF>(p_geo, p_env, weight_geo);
+		const Vector3* normal = s_rec.apply_cosine ? &s_rec.cosine_normal : nullptr;
+		auto p_light = std::make_shared<Light_Mixture_PDF>(light_sampler, origin, normal);
+		if (!p_light->available())
+			return nullptr;
+		return p_light;
 	}
 
 	// Suppress immediate emission / environment when the caller already handles direct lighting explicitly.
@@ -609,12 +610,12 @@ private :
 			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights, true);
 		}
 
-		auto p_light = build_light_pdf(lights, rec.p);
+		auto p_light = build_light_pdf(rec.p, s_rec);
 
 		const int bounce = max_depth - depth;
 		// Bounce zero is the camera-visible surface, where extra direct-light samples help most.
 		// More first-bounce light samples reduce direct-light noise where the image is most visible.
-		const int light_direct_sample_count = (bounce == 0) ? first_bounce_samples : 1;
+		const int light_direct_sample_count = !p_light ? 0 : (bounce == 0) ? first_bounce_samples : 1;
 		const int bsdf_direct_sample_count = 1;
 
 		// Spend extra first-bounce budget on explicit light samples instead of duplicating full recursion.
@@ -646,7 +647,7 @@ private :
 		}
 
 		const Color direct_lighting =
-			light_direct_sum / static_cast<double>(light_direct_sample_count) +
+			(light_direct_sample_count > 0 ? light_direct_sum / static_cast<double>(light_direct_sample_count) : Color(0, 0, 0)) +
 			bsdf_direct_sum / static_cast<double>(bsdf_direct_sample_count);
 		// Direct lighting is estimated explicitly; recursion only carries indirect light forward.
 		const Color indirect_lighting =
@@ -704,7 +705,7 @@ private :
 		if (bsdf_pdf <= 0.0)
 			return Color(0, 0, 0);
 
-		const double light_pdf = p_light->value(scattered.direction());
+		const double light_pdf = p_light ? p_light->value(scattered.direction()) : 0.0;
 		const double mis_weight =
 			power_heuristic(bsdf_pdf, bsdf_sample_count, light_pdf, light_sample_count);
 

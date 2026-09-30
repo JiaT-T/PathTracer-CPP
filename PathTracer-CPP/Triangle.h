@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include "Hittable.h"
+#include "Material.h"
 #include "Vector3.h"
 
 struct TexCoord2
@@ -95,6 +96,16 @@ public :
 		auto cosine = std::fabs(dot(face_normal, direction) / direction.length());
 
 		return squared_distance / (cosine * area);
+	}
+
+	bool light_shape_info(LightShapeInfo& info) const override
+	{
+		info.shape = LightShapeInfo::Shape::Planar;
+		info.center = (v0 + v1 + v2) / 3.0;
+		info.normal = face_normal; // Diffuse_Light emits on the front face (towards +face_normal)
+		info.area = area;
+		info.luminance = mat ? mat->EmissionLuminance(0.5, 0.5, info.center) : 0.0;
+		return true;
 	}
 
 	Vector3 random(const Point3& origin) const override
