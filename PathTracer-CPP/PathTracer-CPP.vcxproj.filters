@@ -149,6 +149,9 @@
     <ClInclude Include="Integrator.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="RenderAOV.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="Stats.h">
       <Filter>头文件</Filter>
     </ClInclude>

@@ -62,6 +62,8 @@ struct PathSample
 	// Denoiser guide: first non-delta vertex (seen through mirrors / glass), albedo includes
 	// the delta-chain attenuation (Audit section 7, item 4).
 	bool guide_valid = false;
+	bool guide_emitter = false;        // guide vertex is an emitter (path ends there)
+	double guide_glossiness = 0.0;     // p_spec * (1 - roughness)^2 of the guide vertex
 	Color guide_albedo = Color(0, 0, 0);
 	Vector3 guide_normal = Vector3(0, 0, 0);
 	double guide_depth = 0.0;
@@ -113,6 +115,7 @@ public:
 		Point3 prev_point;
 		LightSampler::Probabilities prev_probs;
 		Color delta_chain(1, 1, 1);        // attenuation through delta events before the guide vertex
+		double path_distance = 0.0;        // distance travelled along the path (guide depth)
 
 		for (int bounce = 0; ; ++bounce)
 		{
@@ -141,33 +144,50 @@ public:
 				record->depth = rec.t * ray.direction().length();
 				record->geometry_normal = rec.geo_n;
 				record->shading_normal = rec.n;
-				record->albedo = rec.mat->Albedo(rec.u, rec.v, rec.p);
 			}
-
-			if (bounce >= settings.max_depth)
-				break;
 
 			BSDF bsdf;
-			if (!rec.mat->GetBSDF(ray, rec, bsdf))
-				break; // absorbed (emitter, or scattering below the surface)
-			counters.path_vertices++;
+			const bool scatters = bounce < settings.max_depth && rec.mat->GetBSDF(ray, rec, bsdf);
 			if (record)
 			{
-				record->path_length = bounce + 1;
-				if (bounce == 0 && !bsdf.is_delta() && bsdf.applies_cosine())
+				const bool surface = scatters && !bsdf.is_delta();
+				if (bounce == 0)
 				{
-					record->shading_normal = bsdf.shading_normal();
-					record->roughness = bsdf.kind == BSDF::Kind::PBR ? bsdf.lobe_roughness() : 1.0;
-					record->metallic = bsdf.kind == BSDF::Kind::PBR ? bsdf.lobe_metallic() : 0.0;
+					// Emitters / delta surfaces: material albedo; otherwise the BSDF's (no refetch).
+					record->albedo = surface ? bsdf.base_albedo() : rec.mat->Albedo(rec.u, rec.v, rec.p);
+					if (surface && bsdf.applies_cosine())
+					{
+						record->shading_normal = bsdf.shading_normal();
+						record->roughness = bsdf.kind == BSDF::Kind::PBR ? bsdf.lobe_roughness() : 1.0;
+						record->metallic = bsdf.kind == BSDF::Kind::PBR ? bsdf.lobe_metallic() : 0.0;
+					}
 				}
-				if (!record->guide_valid && !bsdf.is_delta())
+				if (!record->guide_valid && (surface || !scatters))
 				{
+					// First non-delta vertex (or where the path ends): denoiser guide.
 					record->guide_valid = true;
-					record->guide_albedo = delta_chain * rec.mat->Albedo(rec.u, rec.v, rec.p);
-					record->guide_normal = bsdf.applies_cosine() ? bsdf.shading_normal() : rec.geo_n;
-					record->guide_depth = record->depth;
+					record->guide_emitter = !scatters && (Le.x() > 0.0 || Le.y() > 0.0 || Le.z() > 0.0);
+					if (surface && bsdf.kind == BSDF::Kind::PBR)
+					{
+						const double smooth = 1.0 - bsdf.lobe_roughness();
+						record->guide_glossiness = bsdf.specular_probability() * smooth * smooth;
+					}
+					record->guide_albedo = delta_chain * (surface ? bsdf.base_albedo() : rec.mat->Albedo(rec.u, rec.v, rec.p));
+					// Media have no normal (rec.n is an arbitrary (1,0,0), which equals e.g. the
+					// Cornell red wall's normal); use the view-facing direction so medium pixels
+					// group with each other and not with surfaces.
+					record->guide_normal = !surface ? rec.geo_n
+						: bsdf.applies_cosine() ? bsdf.shading_normal()
+						: -normalize(ray.direction());
+					record->guide_depth = path_distance + rec.t * ray.direction().length();
 				}
 			}
+			path_distance += rec.t * ray.direction().length();
+			if (!scatters)
+				break; // max depth, or absorbed (emitter, or scattering below the surface)
+			counters.path_vertices++;
+			if (record)
+				record->path_length = bounce + 1;
 
 			if (bsdf.is_delta())
 			{

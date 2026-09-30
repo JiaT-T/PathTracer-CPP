@@ -19,6 +19,7 @@
 #include "Parallel.h"
 #include "LightSampler.h"
 #include "Integrator.h"
+#include "RenderAOV.h"
 #include "Stats.h"
 
 // Camera model + render loop. Radiance estimation lives in PathIntegrator (Integrator.h).
@@ -52,6 +53,10 @@ public :
 	int first_bounce_light_samples = 4;
 	bool russian_roulette = true;
 	int rr_start_bounce = 3;
+
+	// Debug AOVs written next to the output (<name>_<aov>.pfm / .ppm), see RenderAOV.h
+	std::vector<AOVKind> aovs;
+	AtrousDenoiser::Settings denoiser_settings;
 
 	// Reproducibility / execution
 	uint64_t seed = 1;          // Global seed; every (pixel, sample) stream is derived from it
@@ -97,6 +102,18 @@ public :
 	uint64_t LastNonFiniteSamples() const { return last_non_finite_samples; }
 	int LastSampleCount() const { return last_sample_count; }
 	const RenderCounters& LastCounters() const { return last_counters; }
+	// Linear AOV of the most recent render (requested AOVs, plus Variance / SampleCount always).
+	std::vector<Color> LastAOV(AOVKind kind) const { return aov_buffers.resolve(kind); }
+
+	// Denoise the most recent render with explicit settings (evaluation / comparisons).
+	std::vector<Color> Denoise(const AtrousDenoiser::Settings& settings) const
+	{
+		std::vector<Color> out;
+		PostProcessInput input{ framebuffer, guide_buffer, image_width, image_height };
+		PostProcessOutput output{ out };
+		AtrousDenoiser(settings).Apply(input, output);
+		return out;
+	}
 
 	// Ver.1: no explicit light list (pure BSDF sampling; emission found by chance).
 	void Render(const Hittable& world, PPMPreviewWindow* preview = nullptr)
@@ -139,6 +156,7 @@ private :
 	std::vector<Color> framebuffer;
 	std::vector<Color> filtered_framebuffer;
 	std::vector<PixelGuide> guide_buffer;
+	AOVBuffers aov_buffers;
 	uint64_t last_non_finite_samples = 0;
 	int last_sample_count = 0;
 	RenderCounters last_counters;
@@ -190,6 +208,7 @@ private :
 		framebuffer.assign(pixel_count, Color(0, 0, 0));
 		filtered_framebuffer.clear();
 		guide_buffer.assign(pixel_count, PixelGuide{});
+		aov_buffers.reset(pixel_count, aovs);
 		std::vector<unsigned char> preview_pixels;
 		const std::vector<RenderTile> tiles = build_tiles();
 		const int total_samples = std::max(1, sample_per_pixel);
@@ -229,18 +248,12 @@ private :
 					for (int i = tile.x_begin; i < tile.x_end; i++)
 					{
 						const size_t index = static_cast<size_t>(j) * image_width + i;
-						if (s_begin == 0)
-						{
-							// The guide ray may hit a medium, which consumes random numbers.
-							rng::begin_pixel_sample(seed ^ 0xA5A5A5A5A5A5A5A5ull, index, 0);
-							guide_buffer[index] = trace_pixel_data(get_center_ray(i, j), world);
-						}
-
 						Color sum = accumulation[index];
 						for (int s = s_begin; s < s_end; ++s)
 						{
 							rng::begin_pixel_sample(seed, index, static_cast<uint64_t>(s));
-							const Color c = integrator.Li(get_ray(i, j, s));
+							PathSample record;
+							const Color c = integrator.Li(get_ray(i, j, s), &record);
 							if (!std::isfinite(c.x()) || !std::isfinite(c.y()) || !std::isfinite(c.z()))
 							{
 								// A single NaN/Inf would poison the pixel forever; drop it and count it.
@@ -248,10 +261,10 @@ private :
 								continue;
 							}
 							sum += c;
+							aov_buffers.accumulate(index, record);
 						}
 						accumulation[index] = sum;
 						framebuffer[index] = sum / static_cast<double>(s_end);
-						guide_buffer[index].sample_count = s_end;
 					}
 				}
 
@@ -299,6 +312,9 @@ private :
 		if (verbose && last_non_finite_samples > 0)
 			std::clog << "\nWarning: dropped " << last_non_finite_samples << " non-finite samples.\n";
 
+		for (size_t i = 0; i < pixel_count; ++i)
+			guide_buffer[i] = aov_buffers.guide(i);
+
 		const bool needs_filtered_framebuffer =
 			writes_denoised_output || (progressive && preview && !preview->IsClosed());
 		if (needs_filtered_framebuffer)
@@ -306,7 +322,7 @@ private :
 			filtered_framebuffer.assign(pixel_count, Color(0, 0, 0));
 			PostProcessInput post_input{ framebuffer, guide_buffer, image_width, image_height };
 			PostProcessOutput post_output{ filtered_framebuffer };
-			const AtrousDenoiser denoiser;
+			const AtrousDenoiser denoiser(denoiser_settings);
 			denoiser.Apply(post_input, post_output);
 		}
 
@@ -329,6 +345,13 @@ private :
 				image_io::write_pfm(image_io::replace_extension(output_filename, ".pfm"), framebuffer, image_width, image_height);
 				if (writes_denoised_output)
 					image_io::write_pfm(image_io::replace_extension(output_filename, "_denoised.pfm"), filtered_framebuffer, image_width, image_height);
+			}
+			for (AOVKind kind : aovs)
+			{
+				const std::vector<Color> data = aov_buffers.resolve(kind);
+				const std::string base = image_io::replace_extension(output_filename, std::string("_") + aov_name(kind));
+				image_io::write_pfm(base + ".pfm", data, image_width, image_height);
+				image_io::write_ppm_bytes(base + ".ppm", AOVBuffers::visualize(kind, data, max_depth), image_width, image_height);
 			}
 		}
 
@@ -486,33 +509,4 @@ private :
 		return camera_center + (p[0] * defocus_disk_u) + (p[1] * defocus_disk_v);
 	}
 
-	Ray get_center_ray(int i, int j) const
-	{
-		auto pixel_sample =
-			pixel00_center +
-			i * pixel_delta_u +
-			j * pixel_delta_v;
-
-		auto ray_origin = camera_center;
-		auto ray_direction = pixel_sample - ray_origin;
-
-		return Ray(ray_origin, ray_direction, 0.0);
-	}
-
-	PixelGuide trace_pixel_data(const Ray& ray, const Hittable& world) const
-	{
-		PixelGuide data;
-
-		HitRecord rec;
-		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return data;
-
-		data.valid = true;
-		data.normal = normalize(rec.geo_n);
-		data.depth = rec.t;
-		data.sample_count = 1;
-		data.albedo = rec.mat ? rec.mat->Albedo(rec.u, rec.v, rec.p) : Color(1, 1, 1);
-
-		return data;
-	}
 };

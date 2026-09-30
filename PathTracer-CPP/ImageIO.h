@@ -115,6 +115,20 @@ namespace image_io
 		return static_cast<bool>(out);
 	}
 
+	// Binary P6 PPM from already-mapped 8-bit RGB (AOV visualizations).
+	inline bool write_ppm_bytes(const std::string& filename, const std::vector<unsigned char>& rgb, int width, int height)
+	{
+		std::ofstream out(filename, std::ios::binary);
+		if (!out.is_open())
+		{
+			std::cerr << "Error: Cannot open file: " << filename << "\n";
+			return false;
+		}
+		out << "P6\n" << width << ' ' << height << "\n255\n";
+		out.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+		return static_cast<bool>(out);
+	}
+
 	// Replace the extension of a file name ("a/b.ppm" -> "a/b.pfm"); appends if there is none.
 	inline std::string replace_extension(const std::string& filename, const std::string& extension)
 	{

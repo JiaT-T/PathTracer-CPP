@@ -1009,9 +1009,12 @@ namespace
 		auto rough_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_Roughness.jpg", color_space::Linear);
 		auto metal_tex = std::make_shared<Image_Texture>("images/Metal_Gold/Metal048C_1K-JPG_Metalness.jpg", color_space::Linear);
 		auto mapped = std::make_shared<PBR_Material>(base_tex, normal_tex, rough_tex, metal_tex);
-		// Dielectric version so the normal map also drives the diffuse lobe.
+		// Dielectric with a strong normal map (tilts up to ~25 deg) so the normal map visibly
+		// drives the diffuse lobe on both the triangle panel and the sphere.
+		auto strong_normal_tex = std::make_shared<Image_Texture>(
+			"images/ChristmasTreeOrnament019/ChristmasTreeOrnament019_1K-JPG_NormalGL.jpg", color_space::Linear);
 		auto mapped_diffuse = std::make_shared<PBR_Material>(
-			std::make_shared<Solid_Color>(Color(0.8, 0.8, 0.8)), normal_tex,
+			std::make_shared<Solid_Color>(Color(0.8, 0.8, 0.8)), strong_normal_tex,
 			std::make_shared<Solid_Color>(0.6, 0.6, 0.6), std::make_shared<Solid_Color>(0.0, 0.0, 0.0));
 
 		world.add(std::make_shared<Quad>(Point3(-8, -1, -8), Vector3(16, 0, 0), Vector3(0, 0, 16), ground_mat));

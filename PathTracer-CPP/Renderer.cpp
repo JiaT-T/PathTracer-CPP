@@ -28,6 +28,9 @@ namespace
 		uint64_t seed = 0;
 		std::string out;
 		std::string output_mode;
+		std::vector<AOVKind> aovs;
+		std::string denoiser = "variance";
+		bool no_rr = false;
 		bool preview = true;
 		bool keep_preview_open = false;
 	};
@@ -46,6 +49,11 @@ namespace
 			"  --threads <n>           Worker threads (0 = all hardware threads)\n"
 			"  --out <file.ppm>        Output file; a linear <file>.pfm is written next to it\n"
 			"  --output-mode <m>       raw | denoised | both\n"
+			"  --aov <list>            Also write AOVs (<out>_<aov>.pfm + .ppm), comma separated or 'all':\n"
+			"                          beauty albedo normal geo_normal depth roughness metallic emission\n"
+			"                          direct indirect samples bsdf_pdf light_pdf mis_weight path_length variance\n"
+			"  --denoiser <m>          variance (default) | legacy | off\n"
+			"  --no-rr                 Disable Russian roulette\n"
 			"  --no-preview            Do not open the Win32 preview window\n"
 			"  --keep-preview          Keep the preview window open after rendering\n"
 			"  --list                  List scenes\n"
@@ -56,7 +64,9 @@ namespace
 			"  --regress [--update-references] [--ref-spp n]\n"
 			"                          Render small fixed-seed scenes and compare to tests/reference\n"
 			"  --bench [--scene s] [--spp n] [--width px] [--threads-list 1,2,4,0] [--repeat n]\n"
-			"                          Repeatable benchmark with ray counters and thread scaling\n";
+			"                          Repeatable benchmark with ray counters and thread scaling\n"
+			"  --denoise-eval [--scene s] [--spp n] [--ref-spp n] [--width px]\n"
+			"                          Error of raw / legacy / variance-guided denoising vs a reference\n";
 	}
 
 	uint64_t random_seed()
@@ -129,6 +139,10 @@ namespace
 		if (options.width > 0) cam.image_width = options.width;
 		if (options.depth > 0) cam.max_depth = options.depth;
 		if (!options.out.empty()) cam.output_filename = options.out;
+		cam.aovs = options.aovs;
+		cam.russian_roulette = !options.no_rr;
+		if (options.denoiser == "legacy") cam.denoiser_settings = AtrousDenoiser::Settings::legacy();
+		else if (options.denoiser == "off") cam.denoiser_settings.enabled = false;
 		if (options.output_mode == "raw") cam.progressive_output_mode = Camera::Progressive_Output_Mode::Raw;
 		else if (options.output_mode == "denoised") cam.progressive_output_mode = Camera::Progressive_Output_Mode::Denoised;
 		else if (options.output_mode == "both") cam.progressive_output_mode = Camera::Progressive_Output_Mode::Denoised_With_Raw;
@@ -178,10 +192,12 @@ int main(int argc, char** argv)
 	std::vector<std::string> args(argv + 1, argv + argc);
 	CliOptions options;
 
-	enum class Command { Render, Test, Regress, Bench, List, Help } command = Command::Render;
+	enum class Command { Render, Test, Regress, Bench, DenoiseEval, List, Help } command = Command::Render;
 	std::string test_filter;
 	RegressionOptions regress;
 	BenchmarkOptions bench;
+	DenoiseEvalOptions denoise_eval;
+	bool scene_given = false;
 
 	for (size_t i = 0; i < args.size(); ++i)
 	{
@@ -207,13 +223,25 @@ int main(int argc, char** argv)
 		}
 		else if (a == "--regress") command = Command::Regress;
 		else if (a == "--update-references") regress.update_references = true;
-		else if (a == "--ref-spp") regress.reference_spp = std::stoi(next("--ref-spp"));
+		else if (a == "--ref-spp") { regress.reference_spp = std::stoi(next("--ref-spp")); denoise_eval.reference_spp = regress.reference_spp; }
 		else if (a == "--bench") command = Command::Bench;
+		else if (a == "--denoise-eval") command = Command::DenoiseEval;
+		else if (a == "--sweep") denoise_eval.sweep = true;
 		else if (a == "--threads-list") bench.thread_list = parse_int_list(next("--threads-list"));
 		else if (a == "--repeat") bench.repeat = std::stoi(next("--repeat"));
-		else if (a == "--scene") { options.scene = next("--scene"); bench.scene = options.scene; }
-		else if (a == "--spp") { options.spp = std::stoi(next("--spp")); bench.spp = options.spp; }
-		else if (a == "--width") { options.width = std::stoi(next("--width")); bench.width = options.width; }
+		else if (a == "--scene") { options.scene = next("--scene"); bench.scene = options.scene; denoise_eval.scene = options.scene; scene_given = true; }
+		else if (a == "--spp") { options.spp = std::stoi(next("--spp")); bench.spp = options.spp; denoise_eval.spp = options.spp; }
+		else if (a == "--width") { options.width = std::stoi(next("--width")); bench.width = options.width; denoise_eval.width = options.width; }
+		else if (a == "--aov")
+		{
+			if (!parse_aov_list(next("--aov"), options.aovs))
+			{
+				std::cerr << "Unknown AOV name. See --help.\n";
+				return 2;
+			}
+		}
+		else if (a == "--denoiser") options.denoiser = next("--denoiser");
+		else if (a == "--no-rr") options.no_rr = true;
 		else if (a == "--depth") { options.depth = std::stoi(next("--depth")); bench.depth = options.depth; }
 		else if (a == "--seed") { options.has_seed = true; options.seed = std::stoull(next("--seed")); bench.seed = options.seed; }
 		else if (a == "--threads") options.threads = std::stoi(next("--threads"));
@@ -236,6 +264,9 @@ int main(int argc, char** argv)
 	case Command::Test: return run_unit_tests(test_filter);
 	case Command::Regress: return run_regression(regress);
 	case Command::Bench: return run_benchmark(bench);
+	case Command::DenoiseEval:
+		if (!scene_given) denoise_eval.scene = "";
+		return run_denoise_eval(denoise_eval);
 	case Command::Render: break;
 	}
 	return render_command(options);

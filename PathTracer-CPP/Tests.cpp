@@ -29,6 +29,7 @@
 #include "LightSampler.h"
 #include "Hittable_List.h"
 #include "Integrator.h"
+#include "RenderAOV.h"
 #include "Stats.h"
 
 // ============================================================================================
@@ -920,6 +921,156 @@ namespace
 		check(!identical(a, d), "different seed -> different image");
 	}
 
+	struct DenoiseScore
+	{
+		ImageMetrics raw, legacy, variance;
+		double seconds_legacy = 0.0, seconds_variance = 0.0;
+		std::vector<std::pair<std::string, ImageMetrics>> sweep;
+	};
+
+	// Renders `scene` at spp and ref_spp (different seeds) and scores raw / denoised images.
+	DenoiseScore score_denoiser(const std::string& scene_name, int spp, int ref_spp, int width, int threads = 0, bool sweep = false)
+	{
+		auto render = [&](int s, uint64_t seed, Camera* keep)
+		{
+			const SceneEntry* entry = find_scene(scene_name);
+			rng::seed_thread(5);
+			SceneDesc scene = entry->build();
+			if (width > 0) scene.cam.image_width = width;
+			scene.cam.sample_per_pixel = s;
+			scene.cam.seed = seed;
+			scene.cam.thread_count = threads;
+			scene.cam.write_outputs = false;
+			scene.cam.verbose = false;
+			if (scene.use_lights) scene.cam.Render(scene.world, scene.lights);
+			else scene.cam.Render(scene.world);
+			if (keep) *keep = scene.cam;
+			return scene.cam.LastFramebuffer();
+		};
+		const std::vector<Color> reference = render(ref_spp, 1001, nullptr);
+		Camera cam;
+		const std::vector<Color> raw = render(spp, 2002, &cam);
+
+		DenoiseScore score;
+		score.raw = compare_images(raw, reference);
+		auto t0 = std::chrono::steady_clock::now();
+		score.legacy = compare_images(cam.Denoise(AtrousDenoiser::Settings::legacy()), reference);
+		auto t1 = std::chrono::steady_clock::now();
+		score.variance = compare_images(cam.Denoise(AtrousDenoiser::Settings{}), reference);
+		auto t2 = std::chrono::steady_clock::now();
+		score.seconds_legacy = std::chrono::duration<double>(t1 - t0).count();
+		score.seconds_variance = std::chrono::duration<double>(t2 - t1).count();
+		if (sweep)
+		{
+			for (double sigma : { 1.0, 2.0, 4.0 })
+				for (int iterations : { 2, 3, 4, 5 })
+					for (bool demod : { true, false })
+					{
+						AtrousDenoiser::Settings s;
+						s.sigma_luminance = sigma;
+						s.iterations = iterations;
+						s.demodulate_albedo = demod;
+						score.sweep.push_back({ "sigma " + fmt(sigma, 0) + " it " + std::to_string(iterations) + (demod ? " demod" : " no-demod"),
+							compare_images(cam.Denoise(s), reference) });
+					}
+		}
+		return score;
+	}
+
+	void test_denoiser()
+	{
+		std::cout << "\n[denoise] variance-guided A-Trous\n";
+		// Low spp: the filter must reduce the error against a converged reference.
+		for (const char* name : { "cornell_small", "normal_map_small" })
+		{
+			const DenoiseScore s = score_denoiser(name, 16, 1024, 0);
+			check(s.variance.rel_mse < 0.7 * s.raw.rel_mse, std::string("denoised relMSE < 0.7 x raw at 16 spp: ") + name,
+				"raw=" + fmt(s.raw.rel_mse, 5) + " legacy=" + fmt(s.legacy.rel_mse, 5) + " variance=" + fmt(s.variance.rel_mse, 5));
+			check(std::abs(s.variance.mean_test - s.raw.mean_test) < 0.01 * std::max(1e-3, s.raw.mean_test),
+				std::string("denoiser preserves the image mean (energy): ") + name,
+				"raw mean=" + fmt(s.raw.mean_test, 5) + " denoised mean=" + fmt(s.variance.mean_test, 5));
+		}
+		// High spp: variance -> 0, the filter must fade out instead of blurring converged detail.
+		{
+			const SceneEntry* entry = find_scene("normal_map_small");
+			rng::seed_thread(5);
+			SceneDesc scene = entry->build();
+			scene.cam.sample_per_pixel = 2048;
+			scene.cam.write_outputs = false;
+			scene.cam.verbose = false;
+			scene.cam.Render(scene.world, scene.lights);
+			const std::vector<Color>& raw = scene.cam.LastFramebuffer();
+			const ImageMetrics variance = compare_images(scene.cam.Denoise(AtrousDenoiser::Settings{}), raw);
+			const ImageMetrics legacy = compare_images(scene.cam.Denoise(AtrousDenoiser::Settings::legacy()), raw);
+			check(variance.rel_mse < 0.5 * legacy.rel_mse, "at 2048 spp the variance-guided filter changes the image less than the legacy filter",
+				"relMSE(denoised, raw): variance=" + fmt(variance.rel_mse, 7) + " legacy=" + fmt(legacy.rel_mse, 7));
+		}
+	}
+
+	void test_aovs()
+	{
+		std::cout << "\n[aov] debug outputs\n";
+		const SceneEntry* entry = find_scene("normal_map_small");
+		rng::seed_thread(5);
+		SceneDesc scene = entry->build();
+		scene.cam.sample_per_pixel = 16;
+		scene.cam.write_outputs = false;
+		scene.cam.verbose = false;
+		parse_aov_list("all", scene.cam.aovs);
+		scene.cam.Render(scene.world, scene.lights);
+		const std::vector<Color>& beauty = scene.cam.LastFramebuffer();
+		const auto e = scene.cam.LastAOV(AOVKind::Emission);
+		const auto d = scene.cam.LastAOV(AOVKind::Direct);
+		const auto ind = scene.cam.LastAOV(AOVKind::Indirect);
+		double worst = 0.0;
+		for (size_t i = 0; i < beauty.size(); ++i)
+			worst = std::max(worst, (beauty[i] - (e[i] + d[i] + ind[i])).length() / std::max(1e-3, beauty[i].length()));
+		check(worst < 1e-4, "emission + direct + indirect = beauty", "max relative diff=" + fmt(worst, 7));
+
+		const auto beauty_aov = scene.cam.LastAOV(AOVKind::Beauty);
+		const ImageMetrics m = compare_images(beauty_aov, beauty);
+		check(m.rmse < 1e-4 * std::max(1.0, m.mean_reference), "beauty AOV equals the framebuffer", "rmse=" + fmt(m.rmse, 8));
+
+		// Normal-mapped panel and spheres: the shading normal must differ from the geometric
+		// normal on a substantial part of the image (the ground and background are not mapped).
+		const auto ns = scene.cam.LastAOV(AOVKind::ShadingNormal);
+		const auto ng = scene.cam.LastAOV(AOVKind::GeometryNormal);
+		int tilted = 0, counted = 0;
+		for (size_t i = 0; i < ns.size(); ++i)
+		{
+			if (ns[i].length_squared() < 0.25 || ng[i].length_squared() < 0.25)
+				continue;
+			const double angle = std::acos(std::clamp(dot(normalize(ns[i]), normalize(ng[i])), -1.0, 1.0)) * 180.0 / pi;
+			if (angle > 2.0)
+				tilted++;
+			counted++;
+		}
+		const double fraction = counted ? static_cast<double>(tilted) / counted : 0.0;
+		check(fraction > 0.05, "normal maps perturb the shading normal (sphere + panel)",
+			"pixels with |n_s, n_g| > 2 deg: " + fmt(100.0 * fraction, 1) + "%");
+
+		// Sphere-only check: the normal-mapped dielectric Sphere primitive (Audit H6) covers the
+		// image centre; most of its pixels must show a perturbed shading normal.
+		{
+			const int w = scene.cam.image_width;
+			const int h = scene.cam.output_height();
+			int sphere_tilted = 0, sphere_counted = 0;
+			for (int y = h / 2 - 6; y < h / 2 + 6; ++y)
+				for (int x = w / 2 - 6; x < w / 2 + 6; ++x)
+				{
+					const size_t i = static_cast<size_t>(y) * w + x;
+					const double angle = std::acos(std::clamp(dot(normalize(ns[i]), normalize(ng[i])), -1.0, 1.0)) * 180.0 / pi;
+					sphere_tilted += angle > 2.0 ? 1 : 0;
+					sphere_counted++;
+				}
+			check(sphere_tilted > sphere_counted / 3, "normal map is applied on the Sphere primitive",
+				std::to_string(sphere_tilted) + " / " + std::to_string(sphere_counted) + " centre pixels tilted > 2 deg");
+		}
+
+		const auto samples = scene.cam.LastAOV(AOVKind::SampleCount);
+		check(std::abs(samples[samples.size() / 2].x() - 16.0) < 1e-9, "sample count AOV = spp");
+	}
+
 	void test_hot_path_allocations()
 	{
 		std::cout << "\n[perf] heap allocations in the path-tracing hot path (Audit P-1)\n";
@@ -1015,6 +1166,8 @@ int run_unit_tests(const std::string& filter)
 		{ "determinism", test_determinism },
 		{ "roulette", test_russian_roulette },
 		{ "alloc", test_hot_path_allocations },
+		{ "denoise", test_denoiser },
+		{ "aov", test_aovs },
 	};
 
 	for (const Entry& t : tests)
@@ -1189,4 +1342,34 @@ int run_regression(const RegressionOptions& options)
 
 	std::cout << (failures == 0 ? "REGRESSION PASSED\n" : "REGRESSION FAILED\n");
 	return failures;
+}
+
+int run_denoise_eval(const DenoiseEvalOptions& options)
+{
+	std::vector<std::string> scenes;
+	if (!options.scene.empty())
+		scenes.push_back(options.scene);
+	else
+		scenes = { "cornell_small", "normal_map_small", "environment_small", "volume_small" };
+	const int ref_spp = options.reference_spp > 0 ? options.reference_spp : 64 * options.spp;
+
+	std::cout << "Denoiser evaluation: " << options.spp << " spp vs " << ref_spp << " spp reference\n"
+		<< "| Scene | raw relMSE | legacy relMSE | variance-guided relMSE | raw RMSE | legacy RMSE | variance RMSE | legacy ms | variance ms |\n"
+		<< "|---|---:|---:|---:|---:|---:|---:|---:|---:|\n";
+	for (const std::string& name : scenes)
+	{
+		if (!find_scene(name))
+		{
+			std::cerr << "Unknown scene " << name << "\n";
+			return 2;
+		}
+		const DenoiseScore s = score_denoiser(name, options.spp, ref_spp, options.width, 0, options.sweep);
+		std::cout << "| " << name
+			<< " | " << fmt(s.raw.rel_mse, 5) << " | " << fmt(s.legacy.rel_mse, 5) << " | " << fmt(s.variance.rel_mse, 5)
+			<< " | " << fmt(s.raw.rmse, 5) << " | " << fmt(s.legacy.rmse, 5) << " | " << fmt(s.variance.rmse, 5)
+			<< " | " << fmt(1000.0 * s.seconds_legacy, 1) << " | " << fmt(1000.0 * s.seconds_variance, 1) << " |\n" << std::flush;
+		for (const auto& [label, m] : s.sweep)
+			std::cout << "|   " << label << " | | | " << fmt(m.rel_mse, 5) << " | | | " << fmt(m.rmse, 5) << " | | |\n";
+	}
+	return 0;
 }
