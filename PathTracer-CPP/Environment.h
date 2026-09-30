@@ -20,6 +20,25 @@ public:
 	virtual double sampling_power_estimate() const = 0;
 };
 
+// Uniform radiance from every direction. Used by white-furnace tests, where a convex white
+// object under L = 1 must render exactly 1 everywhere.
+class Constant_Environment : public Environment
+{
+public:
+	explicit Constant_Environment(const Color& L) : L(L) {}
+
+	Color radiance(const Vector3&) const override { return L; }
+	double pdf_value(const Vector3&) const override { return 1.0 / (4.0 * pi); }
+	Vector3 random() const override { return random_unit_vector(); }
+	double sampling_power_estimate() const override
+	{
+		return (0.2126 * L.x() + 0.7152 * L.y() + 0.0722 * L.z()) * 4.0 * pi;
+	}
+
+private:
+	Color L;
+};
+
 class LatLong_Environment : public Environment
 {
 public:

@@ -1,8 +1,7 @@
 #pragma once
 #include <vector>
 #include <numeric>   // for std::iota
-#include <random>    // for modern random number generation
-#include <algorithm> // for std::shuffle
+#include <algorithm> // for std::swap
 
 #include "My_Common.h"
 
@@ -78,14 +77,15 @@ private :
     void generate_permutation(std::vector<int>& p)
     {
         p.resize(point_count);
-
-        std::numeric_limits<int> max_val;
         std::iota(p.begin(), p.end(), 0);
 
-        std::random_device rd;
-        std::mt19937 gen(rd());
-
-        std::shuffle(p.begin(), p.end(), gen);
+        // Fisher-Yates driven by the renderer RNG, so the noise pattern is reproducible
+        // for a given scene seed (std::random_device made every run different).
+        for (int i = point_count - 1; i > 0; i--)
+        {
+            const int target = random_int(0, i);
+            std::swap(p[i], p[target]);
+        }
     }
 
 	static double perlin_interp(const Vector3 c[2][2][2], double u, double v, double w)

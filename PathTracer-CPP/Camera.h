@@ -2,11 +2,11 @@
 #include <algorithm>
 #include <chrono>
 #include <atomic>
+#include <cstdint>
 #include <fstream>
 #include <mutex>
 #include <string>
 #include <vector>
-#include <execution>
 
 #include "Hittable.h"
 #include "My_Common.h"
@@ -15,6 +15,8 @@
 #include "PPMPreviewWindow.h"
 #include "Environment.h"
 #include "PostProcess.h"
+#include "ImageIO.h"
+#include "Parallel.h"
 
 static double power_heuristic(double pdf_a, double pdf_b)
 {
@@ -58,6 +60,13 @@ public :
 	Render_Mode render_mode = Render_Mode::Parallel;
 	Progressive_Output_Mode progressive_output_mode = Progressive_Output_Mode::Denoised;
 
+	// Reproducibility / execution
+	uint64_t seed = 1;          // Global seed; every (pixel, sample) stream is derived from it
+	int thread_count = 0;       // 0 = all hardware threads; ignored when render_mode == Serial
+	bool write_outputs = true;  // false: keep results in memory only (tests / benchmarks)
+	bool write_linear_output = true; // raw linear accumulation -> <output>.pfm
+	bool verbose = true;
+
 	double  vfov     = 90;
 	Vector3 lookfrom = Point3(0, 0, 0);
 	Vector3 lookat   = Point3(0, 0, -1);
@@ -77,83 +86,54 @@ public :
 		environment = std::move(env);
 	}
 
-	// Ver.1
+	const std::shared_ptr<Environment>& GetEnvironment() const { return environment; }
+
+	// Results of the most recent render (linear HDR, row-major, top row first).
+	const std::vector<Color>& LastFramebuffer() const { return framebuffer; }
+	const std::vector<Color>& LastDenoised() const { return filtered_framebuffer; }
+	const std::vector<PixelGuide>& LastGuide() const { return guide_buffer; }
+	uint64_t LastNonFiniteSamples() const { return last_non_finite_samples; }
+	int LastSampleCount() const { return last_sample_count; }
+
+	// Ver.1: no explicit light list (pure BSDF sampling; emission found by chance).
 	void Render(const Hittable& world, PPMPreviewWindow* preview = nullptr)
 	{
-		render_impl(
-			[&](int i, int j)
-			{
-				Color pixel_color(0, 0, 0);
-				for (int s_j = 0; s_j < sqrt_spp; s_j++)
-				{
-					for (int s_i = 0; s_i < sqrt_spp; s_i++)
-					{
-						Ray r = get_ray(i, j, s_i, s_j);
-						pixel_color += ray_color(r, max_depth, world);
-					}
-				}
-				return pixel_color * pixel_sample_scale;
-			},
-			preview);
+		render_image(
+			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world); },
+			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
+			preview,
+			false);
 	}
 
-	// Ver.2
+	// Ver.2: next-event estimation towards `lights` (+ environment) with MIS.
 	void Render(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
 	{
-		render_impl(
-			[&](int i, int j)
-			{
-				Color pixel_color(0, 0, 0);
-				for (int s_j = 0; s_j < sqrt_spp; s_j++)
-				{
-					for (int s_i = 0; s_i < sqrt_spp; s_i++)
-					{
-						Ray r = get_ray(i, j, s_i, s_j);
-						pixel_color += ray_color(r, max_depth, world, lights);
-					}
-				}
-				return pixel_color * pixel_sample_scale;
-			},
-			preview);
+		render_image(
+			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world, lights); },
+			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
+			preview,
+			false);
 	}
 
 	void RenderProgressive(const Hittable& world, PPMPreviewWindow* preview = nullptr)
 	{
-		render_progressive_impl(
-			[&](int i, int j, int sample_index)
-			{
-				const int s_i = sample_index % sqrt_spp;
-				const int s_j = sample_index / sqrt_spp;
-				Ray r = get_ray(i, j, s_i, s_j);
-				return ray_color(r, max_depth, world);
-			},
-			[&](int i, int j)
-			{
-				return trace_pixel_data(get_center_ray(i, j), world);
-			},
-			preview);
+		render_image(
+			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world); },
+			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
+			preview,
+			true);
 	}
 
 	void RenderProgressive(const Hittable& world, const Hittable& lights, PPMPreviewWindow* preview = nullptr)
 	{
-		render_progressive_impl(
-			[&](int i, int j, int sample_index)
-			{
-				const int s_i = sample_index % sqrt_spp;
-				const int s_j = sample_index / sqrt_spp;
-				Ray r = get_ray(i, j, s_i, s_j);
-				return ray_color(r, max_depth, world, lights);
-			},
-			[&](int i, int j)
-			{
-				return trace_pixel_data(get_center_ray(i, j), world);
-			},
-			preview);
+		render_image(
+			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world, lights); },
+			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
+			preview,
+			true);
 	}
 
 private :
-	// Define the size of per tile
-	// or how many pixels in this tile
 	struct RenderTile
 	{
 		int x_begin = 0;
@@ -162,251 +142,191 @@ private :
 		int y_end = 0;
 	};
 
-	static constexpr int kTileSize = 4;
+	static constexpr int kTileSize = 8;
 
-	template <typename PixelShader>
-	void render_impl(PixelShader&& pixel_shader, PPMPreviewWindow* preview)
+	std::vector<Color> accumulation;
+	std::vector<Color> framebuffer;
+	std::vector<Color> filtered_framebuffer;
+	std::vector<PixelGuide> guide_buffer;
+	uint64_t last_non_finite_samples = 0;
+	int last_sample_count = 0;
+
+	int resolved_thread_count() const
 	{
-		initialize();
-
-		// Create an output file stream
-		std::ofstream out(output_filename);
-		if (!out.is_open())
-		{
-			std::cerr << "Error: Cannot open file.\n";
-			return;
-		}
-
-		// Renderer
-		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
-		// The final pixel colors are first stored in a framebuffer,
-		// and then written to the output file at the end of rendering.
-		std::vector<Color> framebuffer(static_cast<size_t>(image_width) * image_height);
-		// Use another buffer to store the preview image pixels
-		std::vector<unsigned char> preview_pixels;
-		auto preview_start_time = std::chrono::steady_clock::now();
-		auto last_preview_update_time = preview_start_time;
-		// This mutex is not used for main rendering process,
-		// but only for synchronizing the preview updates and progress display in the console.
-		std::mutex progress_mutex;
-		// Cause each tile may complete a different number of rows,
-		// we need to track the progress of each row separately to display the remaining scanlines correctly.
-		std::atomic<int> completed_rows{ 0 };
-		std::atomic<int> completed_tiles{ 0 };
-		std::vector<std::atomic<int>> row_progress(static_cast<size_t>(image_height));
-		for (auto& row_counter : row_progress)
-			row_counter.store(0, std::memory_order_relaxed);
-		const std::vector<RenderTile> tiles = build_tiles();
-		const int total_tiles = static_cast<int>(tiles.size());
-		if (preview)
-		{
-			preview_pixels.assign(static_cast<size_t>(image_width) * image_height * 4, 0);
-			preview->UpdateImage(preview_pixels, 0, 0.0);
-		}
-
-		auto render_tile = [&](const RenderTile& tile)
-		{
-			std::vector<Color_Bytes> tile_preview_bytes;
-			if (preview)
-			{
-				tile_preview_bytes.resize(static_cast<size_t>(tile_width(tile) * tile_height(tile)));
-			}
-
-			for (int j = tile.y_begin; j < tile.y_end; j++)
-			{
-				for (int i = tile.x_begin; i < tile.x_end; i++)
-				{
-					Color final_color = pixel_shader(i, j);
-					size_t framebuffer_index = static_cast<size_t>(j) * image_width + i;
-					framebuffer[framebuffer_index] = final_color;
-
-					if (preview)
-					{
-						size_t local_x = static_cast<size_t>(i - tile.x_begin);
-						size_t local_y = static_cast<size_t>(j - tile.y_begin);
-						size_t local_index = local_y * tile_width(tile) + local_x;
-						tile_preview_bytes[local_index] = to_color_bytes(final_color);
-					}
-				}
-			}
-
-			auto now = std::chrono::steady_clock::now();
-			const int tile_completed_rows = update_completed_rows(tile, row_progress, completed_rows);
-			const int finished_tiles = completed_tiles.fetch_add(1, std::memory_order_relaxed) + 1;
-			const bool is_last_tile = finished_tiles == total_tiles;
-
-			std::lock_guard<std::mutex> lock(progress_mutex);
-			if (preview)
-			{
-				blit_tile_preview(tile, tile_preview_bytes, preview_pixels);
-			}
-
-			// The 0.033 means we update the preview at most 30 times per second,
-			if (is_last_tile ||
-				std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033)
-			{
-				std::clog << "\rScanlines remaining: " << (image_height - tile_completed_rows) << ' ' << std::flush;
-
-				if (preview && !preview->IsClosed())
-				{
-					std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-					preview->UpdateImage(preview_pixels, tile_completed_rows, elapsed_seconds.count());
-				}
-
-				last_preview_update_time = now;
-			}
-		};
-
-		// Invoke parallel or serial rendering based on the render mode
-		if (render_mode == Render_Mode::Parallel)
-			std::for_each(std::execution::par, tiles.begin(), tiles.end(), render_tile);
-		else
-			std::for_each(tiles.begin(), tiles.end(), render_tile);
-
-		for (int j = 0; j < image_height; j++)
-		{
-			for (int i = 0; i < image_width; i++)
-			{
-				write_color(out, framebuffer[static_cast<size_t>(j) * image_width + i]);
-			}
-		}
-
-		if (preview && !preview->IsClosed())
-		{
-			auto now = std::chrono::steady_clock::now();
-			if (std::chrono::duration<double>(now - last_preview_update_time).count() > 0.0)
-			{
-				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-				preview->UpdateImage(preview_pixels, image_height, elapsed_seconds.count());
-			}
-		}
-		std::clog << "\rDone.                 \n";
+		return render_mode == Render_Mode::Serial ? 1 : parallel::resolve_thread_count(thread_count);
 	}
 
+	// Shared render loop.
+	//
+	// Every pixel sample starts its own RNG stream (rng::begin_pixel_sample), and each pixel is
+	// accumulated by exactly one thread in sample order, so the result is bit-identical for any
+	// thread count, tile schedule, or progressive pass grouping.
+	//
+	// progressive = true: several passes (preview refresh between passes), then the denoiser.
+	// progressive = false: one pass with all samples, no denoising.
 	template <typename SampleShader, typename GuideShader>
-	void render_progressive_impl(
+	void render_image(
 		SampleShader&& sample_shader,
 		GuideShader&& guide_shader,
-		PPMPreviewWindow* preview)
+		PPMPreviewWindow* preview,
+		bool progressive)
 	{
 		initialize();
 
-		if (!can_open_output_file(output_filename))
-			return;
-
+		const bool writes_denoised_output =
+			progressive && progressive_output_mode != Progressive_Output_Mode::Raw;
 		const bool writes_raw_sidecar =
-			progressive_output_mode == Progressive_Output_Mode::Denoised_With_Raw;
-		const std::string raw_output_filename =
-			add_filename_suffix(output_filename, "_raw");
-		if (writes_raw_sidecar && !can_open_output_file(raw_output_filename))
-			return;
+			progressive && progressive_output_mode == Progressive_Output_Mode::Denoised_With_Raw;
+		const std::string raw_output_filename = image_io::add_suffix(output_filename, "_raw");
+
+		if (write_outputs)
+		{
+			if (!can_open_output_file(output_filename))
+				return;
+			if (writes_raw_sidecar && !can_open_output_file(raw_output_filename))
+				return;
+		}
 
 		const size_t pixel_count = static_cast<size_t>(image_width) * image_height;
-		std::vector<Color> accumulation(pixel_count, Color(0, 0, 0));
-		std::vector<Color> framebuffer(pixel_count, Color(0, 0, 0));
+		accumulation.assign(pixel_count, Color(0, 0, 0));
+		framebuffer.assign(pixel_count, Color(0, 0, 0));
+		filtered_framebuffer.clear();
+		guide_buffer.assign(pixel_count, PixelGuide{});
 		std::vector<unsigned char> preview_pixels;
 		const std::vector<RenderTile> tiles = build_tiles();
-		const int total_samples = sqrt_spp * sqrt_spp;
-
-		std::vector<PixelGuide> guide_buffer(pixel_count);
-		std::vector<Color> filtered_framebuffer(pixel_count);
-		const AtrousDenoiser preview_denoiser;
+		const int total_samples = std::max(1, sample_per_pixel);
+		const int threads = resolved_thread_count();
+		std::atomic<uint64_t> non_finite_samples{ 0 };
 
 		auto preview_start_time = std::chrono::steady_clock::now();
-		auto last_preview_update_time = preview_start_time;
 		if (preview)
 		{
 			preview_pixels.assign(pixel_count * 4, 0);
 			preview->UpdateProgressiveImage(preview_pixels, 0, total_samples, 0.0);
 		}
 
-		for (int sample_index = 0; sample_index < total_samples; ++sample_index)
+		// With a live preview, start with 1 sample per pass and grow the batch until a pass
+		// takes ~0.1 s. Without preview everything runs as a single pass.
+		const bool show_passes = progressive && preview != nullptr;
+		int batch = show_passes ? 1 : total_samples;
+		int samples_done = 0;
+
+		while (samples_done < total_samples)
 		{
-			auto render_tile_sample = [&](const RenderTile& tile)
+			const int s_begin = samples_done;
+			const int s_end = std::min(total_samples, samples_done + batch);
+			const auto pass_start = std::chrono::steady_clock::now();
+			std::atomic<int> tiles_done{ 0 };
+			std::atomic<int> last_percent{ -1 };
+			std::mutex print_mutex;
+
+			parallel::parallel_for(static_cast<int>(tiles.size()), threads, [&](int tile_index, int)
 			{
+				const RenderTile& tile = tiles[static_cast<size_t>(tile_index)];
 				for (int j = tile.y_begin; j < tile.y_end; j++)
 				{
 					for (int i = tile.x_begin; i < tile.x_end; i++)
 					{
-						const size_t framebuffer_index = static_cast<size_t>(j) * image_width + i;
-						accumulation[framebuffer_index] += sample_shader(i, j, sample_index);
-						framebuffer[framebuffer_index] =
-							accumulation[framebuffer_index] / static_cast<double>(sample_index + 1);
-						if (sample_index == 0)
-							guide_buffer[framebuffer_index] = guide_shader(i, j);
-						guide_buffer[framebuffer_index].sample_count = sample_index + 1;
+						const size_t index = static_cast<size_t>(j) * image_width + i;
+						if (s_begin == 0)
+						{
+							// The guide ray may hit a medium, which consumes random numbers.
+							rng::begin_pixel_sample(seed ^ 0xA5A5A5A5A5A5A5A5ull, index, 0);
+							guide_buffer[index] = guide_shader(i, j);
+						}
+
+						Color sum = accumulation[index];
+						for (int s = s_begin; s < s_end; ++s)
+						{
+							rng::begin_pixel_sample(seed, index, static_cast<uint64_t>(s));
+							const Color c = sample_shader(i, j, s);
+							if (!std::isfinite(c.x()) || !std::isfinite(c.y()) || !std::isfinite(c.z()))
+							{
+								// A single NaN/Inf would poison the pixel forever; drop it and count it.
+								non_finite_samples.fetch_add(1, std::memory_order_relaxed);
+								continue;
+							}
+							sum += c;
+						}
+						accumulation[index] = sum;
+						framebuffer[index] = sum / static_cast<double>(s_end);
+						guide_buffer[index].sample_count = s_end;
 					}
 				}
-			};
 
-			if (render_mode == Render_Mode::Parallel)
-				std::for_each(std::execution::par, tiles.begin(), tiles.end(), render_tile_sample);
-			else
-				std::for_each(tiles.begin(), tiles.end(), render_tile_sample);
+				if (verbose && !show_passes)
+				{
+					const int done = tiles_done.fetch_add(1, std::memory_order_relaxed) + 1;
+					const int percent = static_cast<int>(100.0 * done / tiles.size());
+					int previous = last_percent.load(std::memory_order_relaxed);
+					if (percent > previous && last_percent.compare_exchange_strong(previous, percent))
+					{
+						std::lock_guard<std::mutex> lock(print_mutex);
+						std::clog << "\rProgress: " << percent << "% " << std::flush;
+					}
+				}
+			});
 
-			auto now = std::chrono::steady_clock::now();
-			std::clog << "\rSamples: " << (sample_index + 1) << " / " << total_samples << ' ' << std::flush;
+			samples_done = s_end;
+			const auto now = std::chrono::steady_clock::now();
+			if (verbose && show_passes)
+				std::clog << "\rSamples: " << samples_done << " / " << total_samples << ' ' << std::flush;
 
-			const bool is_first_sample = sample_index == 0;
-			const bool is_last_sample = (sample_index + 1) == total_samples;
-			const bool should_update_preview =
-				preview &&
-				!preview->IsClosed() &&
-				(is_first_sample ||
-				 is_last_sample ||
-				 std::chrono::duration<double>(now - last_preview_update_time).count() >= 0.033);
-
-			if (should_update_preview)
+			if (preview && !preview->IsClosed())
 			{
 				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
 				copy_framebuffer_to_preview(framebuffer, preview_pixels);
-				preview->UpdateProgressiveImage(
-					preview_pixels,
-					sample_index + 1,
-					total_samples,
-					elapsed_seconds.count());
-				last_preview_update_time = now;
+				preview->UpdateProgressiveImage(preview_pixels, samples_done, total_samples, elapsed_seconds.count());
+			}
+
+			if (show_passes)
+			{
+				const double pass_seconds = std::chrono::duration<double>(now - pass_start).count();
+				if (pass_seconds < 0.1)
+					batch = std::min(batch * 2, 64);
 			}
 		}
 
-		const bool writes_denoised_output =
-			progressive_output_mode != Progressive_Output_Mode::Raw;
-		const bool needs_filtered_framebuffer =
-			writes_denoised_output || (preview && !preview->IsClosed());
+		last_non_finite_samples = non_finite_samples.load();
+		last_sample_count = total_samples;
+		if (verbose && last_non_finite_samples > 0)
+			std::clog << "\nWarning: dropped " << last_non_finite_samples << " non-finite samples.\n";
 
+		const bool needs_filtered_framebuffer =
+			writes_denoised_output || (progressive && preview && !preview->IsClosed());
 		if (needs_filtered_framebuffer)
 		{
-			PostProcessInput post_input{
-				framebuffer,
-				guide_buffer,
-				image_width,
-				image_height
-			};
+			filtered_framebuffer.assign(pixel_count, Color(0, 0, 0));
+			PostProcessInput post_input{ framebuffer, guide_buffer, image_width, image_height };
 			PostProcessOutput post_output{ filtered_framebuffer };
-			preview_denoiser.Apply(post_input, post_output);
+			const AtrousDenoiser denoiser;
+			denoiser.Apply(post_input, post_output);
 		}
 
 		if (preview && !preview->IsClosed())
 		{
-			auto now = std::chrono::steady_clock::now();
-			std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-			const std::vector<Color>& preview_framebuffer =
-				needs_filtered_framebuffer ? filtered_framebuffer : framebuffer;
-			copy_framebuffer_to_preview(preview_framebuffer, preview_pixels);
-			preview->UpdateProgressiveImage(
-				preview_pixels,
-				total_samples,
-				total_samples,
-				elapsed_seconds.count());
+			std::chrono::duration<double> elapsed_seconds = std::chrono::steady_clock::now() - preview_start_time;
+			copy_framebuffer_to_preview(needs_filtered_framebuffer ? filtered_framebuffer : framebuffer, preview_pixels);
+			preview->UpdateProgressiveImage(preview_pixels, total_samples, total_samples, elapsed_seconds.count());
 		}
 
-		const std::vector<Color>& output_framebuffer =
-			writes_denoised_output ? filtered_framebuffer : framebuffer;
-		if (writes_raw_sidecar)
-			write_framebuffer_to_file(raw_output_filename, framebuffer);
-		write_framebuffer_to_file(output_filename, output_framebuffer);
+		if (write_outputs)
+		{
+			const std::vector<Color>& display = writes_denoised_output ? filtered_framebuffer : framebuffer;
+			if (writes_raw_sidecar)
+				image_io::write_ppm(raw_output_filename, framebuffer, image_width, image_height);
+			image_io::write_ppm(output_filename, display, image_width, image_height);
+			if (write_linear_output)
+			{
+				// Linear, unfiltered estimate: the only output suitable for numerical comparison.
+				image_io::write_pfm(image_io::replace_extension(output_filename, ".pfm"), framebuffer, image_width, image_height);
+				if (writes_denoised_output)
+					image_io::write_pfm(image_io::replace_extension(output_filename, "_denoised.pfm"), filtered_framebuffer, image_width, image_height);
+			}
+		}
 
-		std::clog << "\rDone.                 \n";
+		if (verbose)
+			std::clog << "\rDone.                 \n";
 	}
 
 	std::vector<RenderTile> build_tiles() const
@@ -431,16 +351,6 @@ private :
 		return tiles;
 	}
 
-	static int tile_width(const RenderTile& tile)
-	{
-		return tile.x_end - tile.x_begin;
-	}
-
-	static int tile_height(const RenderTile& tile)
-	{
-		return tile.y_end - tile.y_begin;
-	}
-
 	bool can_open_output_file(const std::string& filename) const
 	{
 		std::ofstream out(filename);
@@ -453,45 +363,8 @@ private :
 		return true;
 	}
 
-	void write_framebuffer_to_file(
-		const std::string& filename,
-		const std::vector<Color>& framebuffer) const
-	{
-		std::ofstream out(filename);
-		if (!out.is_open())
-		{
-			std::cerr << "Error: Cannot open file: " << filename << "\n";
-			return;
-		}
-
-		out << "P3\n" << image_width << ' ' << image_height << "\n255\n";
-		for (int j = 0; j < image_height; j++)
-		{
-			for (int i = 0; i < image_width; i++)
-			{
-				write_color(out, framebuffer[static_cast<size_t>(j) * image_width + i]);
-			}
-		}
-	}
-
-	static std::string add_filename_suffix(
-		const std::string& filename,
-		const std::string& suffix)
-	{
-		const size_t slash = filename.find_last_of("/\\");
-		const size_t dot = filename.find_last_of('.');
-		const bool has_extension =
-			dot != std::string::npos &&
-			(slash == std::string::npos || dot > slash);
-
-		if (!has_extension)
-			return filename + suffix;
-
-		return filename.substr(0, dot) + suffix + filename.substr(dot);
-	}
-
 	void copy_framebuffer_to_preview(
-		const std::vector<Color>& framebuffer,
+		const std::vector<Color>& source,
 		std::vector<unsigned char>& preview_pixels) const
 	{
 		const size_t pixel_count = static_cast<size_t>(image_width) * image_height;
@@ -500,7 +373,7 @@ private :
 
 		for (size_t index = 0; index < pixel_count; ++index)
 		{
-			const Color_Bytes bytes = to_color_bytes(framebuffer[index]);
+			const Color_Bytes bytes = to_color_bytes(source[index]);
 			const size_t pixel_index = index * 4;
 			preview_pixels[pixel_index + 0] = bytes.b;
 			preview_pixels[pixel_index + 1] = bytes.g;
@@ -509,52 +382,8 @@ private :
 		}
 	}
 
-	void blit_tile_preview(
-		const RenderTile& tile,
-		const std::vector<Color_Bytes>& tile_preview_bytes,
-		std::vector<unsigned char>& preview_pixels)
-	{
-		// Copy a finished tile into the full BGRA preview buffer used by the Win32 preview window.
-		const size_t local_width = static_cast<size_t>(tile_width(tile));
-		for (int j = tile.y_begin; j < tile.y_end; j++)
-		{
-			for (int i = tile.x_begin; i < tile.x_end; i++)
-			{
-				size_t local_x = static_cast<size_t>(i - tile.x_begin);
-				size_t local_y = static_cast<size_t>(j - tile.y_begin);
-				size_t local_index = local_y * local_width + local_x;
-				const Color_Bytes& bytes = tile_preview_bytes[local_index];
-				size_t pixel_index = (static_cast<size_t>(j) * image_width + static_cast<size_t>(i)) * 4;
-				preview_pixels[pixel_index + 0] = bytes.b;
-				preview_pixels[pixel_index + 1] = bytes.g;
-				preview_pixels[pixel_index + 2] = bytes.r;
-				preview_pixels[pixel_index + 3] = 255;
-			}
-		}
-	}
-
-	int update_completed_rows(
-		const RenderTile& tile,
-		std::vector<std::atomic<int>>& row_progress,
-		std::atomic<int>& completed_rows)
-	{
-		// A row is counted as finished only after all tile-width chunks in that row are done.
-		const int width = tile_width(tile);
-		for (int j = tile.y_begin; j < tile.y_end; j++)
-		{
-			const int finished_pixels = row_progress[static_cast<size_t>(j)].fetch_add(width, std::memory_order_relaxed) + width;
-			if (finished_pixels == image_width)
-			{
-				completed_rows.fetch_add(1, std::memory_order_relaxed);
-			}
-		}
-
-		return completed_rows.load(std::memory_order_relaxed);
-	}
-
 	int     image_height;       // Rendered image height
-	double  pixel_sample_scale; // Color scale factor for a sum of pixel samples
-	int		sqrt_spp;           // Square root of number of samples per pixel
+	int		sqrt_spp;           // Number of strata per axis (sqrt_spp^2 <= spp)
 	double  recip_sqrt_spp;     // 1 / sqrt_spp
 	Point3  camera_center;      // Camera center
 	Point3  pixel00_center;     // Location of pixel 0, 0
@@ -573,10 +402,10 @@ private :
 		// Ensure the height always greater than 1
 		image_height = (image_height < 1) ? 1 : image_height;
 
-		// Stratified sampling uses a square grid, so only sqrt_spp * sqrt_spp samples are taken.
+		// The first sqrt_spp^2 samples of a pixel are stratified over a sqrt_spp x sqrt_spp grid;
+		// any remaining samples (spp not a perfect square) are uniformly jittered.
 		sqrt_spp = std::max(1, static_cast<int>(std::sqrt(sample_per_pixel)));
 		recip_sqrt_spp = 1.0 / sqrt_spp;
-		pixel_sample_scale = 1.0 / (sqrt_spp * sqrt_spp);
 
 		camera_center = lookfrom;
 
@@ -608,26 +437,29 @@ private :
 		defocus_disk_v = v * defocus_radius;
 	}
 
-	Vector3 sample_square() const
+	// Sub-pixel offset in [-0.5, 0.5]^2 for one sample. The first sqrt_spp^2 samples visit the
+	// strata in a per-pixel pseudo-random order (fixes the progressive "top rows first" bias).
+	Vector3 sample_pixel_offset(int i, int j, int sample_index) const
 	{
-		// Sampling randomly around [-.5,-.5] to [+.5,+.5] in a squared pixel
+		const int strata = sqrt_spp * sqrt_spp;
+		if (sample_index < strata)
+		{
+			const uint32_t pixel_seed = static_cast<uint32_t>(
+				rng::splitmix64(seed ^ (static_cast<uint64_t>(j) * image_width + i)));
+			const uint32_t cell = rng::permute(static_cast<uint32_t>(sample_index), static_cast<uint32_t>(strata), pixel_seed);
+			const int s_i = static_cast<int>(cell) % sqrt_spp;
+			const int s_j = static_cast<int>(cell) / sqrt_spp;
+			return Vector3(
+				((s_i + random_double()) * recip_sqrt_spp) - 0.5,
+				((s_j + random_double()) * recip_sqrt_spp) - 0.5,
+				0);
+		}
 		return Vector3(random_double() - 0.5, random_double() - 0.5, 0);
 	}
 
-	Vector3 sample_square_stratified(int s_i, int s_j) const
+	Ray get_ray(int i, int j, int sample_index) const
 	{
-		// Remap 2D point per pixel to [-0.5, 0.5]
-		auto pixel_x = ((s_i + random_double()) * recip_sqrt_spp) - 0.5;
-		auto pixel_y = ((s_j + random_double()) * recip_sqrt_spp) - 0.5;
-
-		return Vector3(pixel_x, pixel_y, 0);
-	}
-
-	// According to the offset from sample_square(), 
-	// Casting rays randomly around the location: (i, j)
-	Ray get_ray(int i, int j, int s_i, int s_j) const
-	{
-		auto offset = sample_square_stratified(s_i, s_j);
+		auto offset = sample_pixel_offset(i, j, sample_index);
 		auto pixel_sample = pixel00_center +
 							((i + offset.x()) * pixel_delta_u) +
 							((j + offset.y()) * pixel_delta_v);

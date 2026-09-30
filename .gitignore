@@ -23,3 +23,8 @@
 # 忽略所有层级下的 build 文件夹
 **/build/
 build/
+
+# Render outputs (linear PFM / AOV dumps). Regression references are tracked.
+PathTracer-CPP/output/
+*.pfm
+!PathTracer-CPP/tests/reference/*.pfm

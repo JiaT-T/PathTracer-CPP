@@ -127,14 +127,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Benchmark.cpp" />
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="rtw_stb_image.cpp" />
+    <ClCompile Include="Scenes.cpp" />
+    <ClCompile Include="Tests.cpp" />
     <ClCompile Include="tiny_obj_impl.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AABB.h" />
+    <ClInclude Include="Benchmark.h" />
     <ClInclude Include="BVH.h" />
     <ClInclude Include="Camera.h" />
+    <ClInclude Include="ImageIO.h" />
+    <ClInclude Include="Parallel.h" />
+    <ClInclude Include="Sampler.h" />
+    <ClInclude Include="Scenes.h" />
+    <ClInclude Include="Tests.h" />
     <ClInclude Include="Color.h" />
     <ClInclude Include="Constant_Medium.h" />
     <ClInclude Include="Environment.h" />

@@ -27,6 +27,15 @@
     <ClCompile Include="tiny_obj_impl.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Scenes.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Tests.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Benchmark.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Vector3.h">
@@ -105,6 +114,24 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="PostProcess.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Sampler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ImageIO.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Parallel.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Scenes.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Tests.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Benchmark.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
