@@ -702,6 +702,12 @@ namespace
 						check(std::abs(q - ref) < 5e-3 + 0.01 * ref, "metal albedo matches exact height-correlated Smith" + tag,
 							"albedo=" + fmt(q, 4) + " reference=" + fmt(ref, 4));
 					}
+					else
+					{
+						// White dielectric: energy the specular lobe does not reflect goes to the
+						// diffuse layer, so nothing is lost or gained.
+						check(std::abs(q - 1.0) < 0.01, "white dielectric furnace albedo = 1" + tag, "albedo=" + fmt(q, 4));
+					}
 				}
 			}
 		}

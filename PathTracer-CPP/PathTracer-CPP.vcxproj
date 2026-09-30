@@ -140,6 +140,7 @@
     <ClInclude Include="BVH.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="ImageIO.h" />
+    <ClInclude Include="Microfacet.h" />
     <ClInclude Include="Parallel.h" />
     <ClInclude Include="Sampler.h" />
     <ClInclude Include="Scenes.h" />

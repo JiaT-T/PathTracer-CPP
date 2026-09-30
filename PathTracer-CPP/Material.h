@@ -4,6 +4,7 @@
 #include "My_Common.h"
 #include "Texture.h"
 #include "PDF.h"
+#include "Microfacet.h"
 
 class Scattered_Record
 {
@@ -291,14 +292,49 @@ public :
 		const Color base_color = sample_color(base_tex, rec);
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
+		return evaluate_brdf(n, v, l, n_dot_v, n_dot_l, base_color, roughness, metallic);
+	}
+
+	// Metallic-roughness BRDF (without the cosine term).
+	//
+	// Specular: Cook-Torrance D * G2 * F / (4 n.v n.l) with the height-correlated Smith G2 of
+	// the same GGX model the VNDF sampler uses (ggx::G2), so f * cos / pdf_vndf = F * G2 / G1(v).
+	//
+	// Diffuse: base / pi * (1 - m) * (1 - F(n.v)) (1 - F(n.l)) / (1 - F_avg). The previous
+	// kd = 1 - F(v.h) used the per-microfacet Fresnel for the diffuse layer and reflected more
+	// energy than it received at grazing angles (white furnace 1.06). This coupled form is
+	// reciprocal, and its directional albedo is exactly base * (1 - m) * (1 - F(n.v)), i.e. the
+	// diffuse layer only receives the energy the Fresnel interface transmits.
+	static Color evaluate_brdf(
+		const Vector3& n, const Vector3& v, const Vector3& l,
+		double n_dot_v, double n_dot_l,
+		const Color& base_color, double roughness, double metallic)
+	{
+		const double alpha = roughness * roughness;
 		const Color dielectric_f0(0.04, 0.04, 0.04);
 		// F0 is 0.04 for dielectric and becomes base color for metals.
 		const Color f0 = lerp(dielectric_f0, base_color, metallic);
-		const Color F = fresnel_schlick(std::max(dot(v, normalize(v + l)), 0.0), f0);
-		const Color specular = cook_torrance_specular(n, v, l, roughness, f0);
-		// Metals have no diffuse term. Dielectrics keep diffuse energy after Fresnel reflection.
-		const Color kd = (Color(1.0, 1.0, 1.0) - F) * (1.0 - metallic);
-		const Color diffuse = kd * base_color / pi;
+
+		const Vector3 h = normalize(v + l);
+		const double n_dot_h = dot(n, h);
+		const double v_dot_h = std::max(dot(v, h), 0.0);
+		const Color F = ggx::fresnel_schlick(v_dot_h, f0);
+		const double D = ggx::D(n_dot_h, alpha);
+		const double G = ggx::G2(n_dot_v, n_dot_l, alpha);
+		const Color specular = F * (D * G / (4.0 * n_dot_v * n_dot_l));
+
+		if (metallic >= 1.0)
+			return specular;
+
+		// Energy-conserving diffuse under the specular layer: it only receives the energy the
+		// specular lobe does not reflect, 1 - E_spec(mu), in both directions.
+		const ggx::SpecularAlbedoTable& table = ggx::SpecularAlbedoTable::get();
+		const Color one(1.0, 1.0, 1.0);
+		const Color transmit_v = one - table.albedo(n_dot_v, roughness, f0);
+		const Color transmit_l = one - table.albedo(n_dot_l, roughness, f0);
+		const Color avg = one - table.average(roughness, f0);
+		const Color diffuse_norm(std::max(avg.x(), 1e-6), std::max(avg.y(), 1e-6), std::max(avg.z(), 1e-6));
+		const Color diffuse = (1.0 - metallic) * base_color * transmit_v * transmit_l / (pi * diffuse_norm);
 
 		return diffuse + specular;
 	}
@@ -321,31 +357,6 @@ public :
 	Vector3 ShadingNormal(const HitRecord& rec) const override
 	{
 		return sample_shading_normal(rec);
-	}
-
-	Vector3 cook_torrance_specular(
-		Vector3 n,
-		Vector3 v,
-		Vector3 l,
-		float roughness,
-		Vector3 f0) const
-	{
-		// Cook-Torrance = D * G * F / (4 * NdotV * NdotL).
-		Vector3 h = normalize(v + l);
-
-		double n_dot_v = std::max(dot(n, v), 0.0001);
-		double n_dot_l = std::max(dot(n, l), 0.0001);
-		double n_dot_h = std::max(dot(n, h), 0.0);
-		double v_dot_h = std::max(dot(v, h), 0.0);
-
-		double  D = distribution_ggx(n_dot_h, roughness);
-		double  G = geometry_smith(n_dot_v, n_dot_l, roughness);
-		Vector3 F = fresnel_schlick(v_dot_h, f0);
-
-		Vector3 numerator = D * G * F;
-		double denominator = 4.0 * n_dot_v * n_dot_l + 0.0001;
-
-		return numerator / denominator;
 	}
 
 	double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const override
@@ -383,43 +394,6 @@ private:
 
 		const Color value = tex->value(rec.u, rec.v, rec.p);
 		return std::clamp(value.x(), min_value, max_value);
-	}
-
-	Vector3 fresnel_schlick(double cos_theta, const Vector3& F0) const
-	{
-		// Cheap Fresnel approximation: reflection gets stronger at grazing angles.
-		const auto x = std::clamp(1.0 - cos_theta, 0.0, 1.0);
-		const auto x2 = x * x;
-		const auto x5 = x2 * x2 * x;
-		return F0 + (Vector3(1.0, 1.0, 1.0) - F0) * x5;
-	}
-
-	double distribution_ggx(double n_dot_h, double roughness) const
-	{
-		// GGX normal distribution. Lower roughness gives a tighter highlight.
-		auto a = roughness * roughness;
-		auto a2 = a * a;
-		auto denom = (n_dot_h * n_dot_h) * (a2 - 1.0) + 1.0;
-
-		return a2 / (pi * denom * denom);
-	}
-
-	double geometry_smith(double n_dot_v, double n_dot_l, double roughness) const
-	{
-		// Smith masking-shadowing term. It reduces light blocked by microfacets.
-		double r = roughness + 1.0;
-		double k = (r * r) / 8.0;
-
-		double ggx1 = geometry_schlick_ggx(n_dot_v, k);
-		double ggx2 = geometry_schlick_ggx(n_dot_l, k);
-
-		return ggx1 * ggx2;
-	}
-
-	double geometry_schlick_ggx(double n_dot_v, double k) const
-	{
-		double denom = n_dot_v * (1.0 - k) + k;
-		return n_dot_v / denom;
 	}
 
 	// Return a world-space normal from the normal map when valid TBN data exists.
