@@ -4,6 +4,8 @@
   imgtool.py topng  <in.ppm|in.pfm> <out.png> [--exposure E] [--normalize]
   imgtool.py concat <out.png> <in1> <in2> [...] [--vertical] [--gap N]
   imgtool.py diff   <a.pfm> <b.pfm> <out.png> [--scale S]
+  imgtool.py crop   <in> <out.png> x y w h [--scale N]
+  imgtool.py compare <test.pfm> <reference.pfm>
   imgtool.py stats  <in.pfm>
 
 PFM inputs are linear HDR; they are displayed with the same per-channel Reinhard + sRGB
@@ -263,6 +265,65 @@ def cmd_diff(args):
     write_png(rest[2], wa, ha, rows)
 
 
+def cmd_crop(args):
+    """crop <in> <out.png> x y w h [--scale N]  (nearest-neighbour upscale for small crops)"""
+    scale = 1
+    rest = []
+    it = iter(args)
+    for a in it:
+        if a == "--scale":
+            scale = int(next(it))
+        else:
+            rest.append(a)
+    w, h, rows = load_display(rest[0])
+    x0, y0, cw, ch = (int(v) for v in rest[2:6])
+    out = []
+    for y in range(y0, min(h, y0 + ch)):
+        row = rows[y][3 * x0:3 * min(w, x0 + cw)]
+        if scale > 1:
+            row = b"".join(row[3 * i:3 * i + 3] * scale for i in range(len(row) // 3))
+        for _ in range(scale):
+            out.append(row)
+    write_png(rest[1], len(out[0]) // 3, len(out), out)
+
+
+def cmd_compare(args):
+    """compare <test.pfm> <reference.pfm> [--region x y w h]: RMSE and relMSE on linear values."""
+    region = None
+    rest = []
+    it = iter(args)
+    for a_ in it:
+        if a_ == "--region":
+            region = [int(next(it)) for _ in range(4)]
+        else:
+            rest.append(a_)
+    wa, ha, a = read_pfm(rest[0])
+    wb, hb, b = read_pfm(rest[1])
+    if (wa, ha) != (wb, hb):
+        raise ValueError("size mismatch")
+    if region:
+        x0, y0, rw, rh = region
+        a = [row[3 * x0:3 * (x0 + rw)] for row in a[y0:y0 + rh]]
+        b = [row[3 * x0:3 * (x0 + rw)] for row in b[y0:y0 + rh]]
+    se = rel = 0.0
+    n = 0
+    rel_terms = []
+    for ra, rb in zip(a, b):
+        for x, r in zip(ra, rb):
+            if not (math.isfinite(x) and math.isfinite(r)):
+                continue
+            d = x - r
+            se += d * d
+            t = d * d / (r * r + 0.01)
+            rel += t
+            rel_terms.append(t)
+            n += 1
+    # Trimmed relMSE: drop the largest 0.1% of terms (isolates rare fireflies from overall noise).
+    rel_terms.sort()
+    keep = rel_terms[: max(1, int(len(rel_terms) * 0.999))]
+    print("RMSE %.6f relMSE %.6f relMSE_trim99.9 %.6f" % (math.sqrt(se / n), rel / n, sum(keep) / len(keep)))
+
+
 def cmd_stats(args):
     w, h, px = read_pfm(args[0])
     vals = [v for row in px for v in row]
@@ -277,7 +338,8 @@ def main():
         print(__doc__)
         return 1
     cmd, args = sys.argv[1], sys.argv[2:]
-    {"topng": cmd_topng, "concat": cmd_concat, "diff": cmd_diff, "stats": cmd_stats}[cmd](args)
+    {"topng": cmd_topng, "concat": cmd_concat, "diff": cmd_diff, "stats": cmd_stats,
+     "crop": cmd_crop, "compare": cmd_compare}[cmd](args)
     return 0
 
 
