@@ -56,6 +56,7 @@ public :
 		rec.set_face_front(ray, outward_normal);
 		rec.mat = mat;
 		get_sphere_uv(outward_normal, rec.u, rec.v);
+		set_tangent_frame(outward_normal, rec);
 
 		return true;
 	}
@@ -71,6 +72,32 @@ public :
 		auto phi = std::atan2(-p.z(), p.x()) + pi;
 		u = phi / (2.0 * pi);
 		v = theta / pi;
+	}
+
+	// Tangent frame of the (u, v) parameterization above, needed by tangent-space normal maps:
+	//   T = normalize(dp/du) = (z, 0, -x) / rho                        (increasing u)
+	//   B = normalize(dp/dv) = (-cos(theta) cos(phi), sin(theta), cos(theta) sin(phi))
+	//                        = (-x y, rho^2, -z y) / rho                (increasing v)
+	// with rho = sqrt(x^2 + z^2) = sin(theta), cos(theta) = -y, cos(phi) = -x / rho,
+	// sin(phi) = z / rho. cross(T, B) = N_outward, so (T, B, N) is right-handed, matching the
+	// triangle convention (T along +u, B along +v, OpenGL normal maps). T is continuous across
+	// the u = 0 / 1 seam; at the two poles dp/du vanishes and an arbitrary tangent orthogonal
+	// to N is used (measure-zero set).
+	static void set_tangent_frame(const Vector3& n, HitRecord& rec)
+	{
+		const double rho2 = n.x() * n.x() + n.z() * n.z();
+		if (rho2 > 1e-12)
+		{
+			const double inv_rho = 1.0 / std::sqrt(rho2);
+			rec.tangent = Vector3(n.z() * inv_rho, 0.0, -n.x() * inv_rho);
+			rec.bitangent = Vector3(-n.x() * n.y() * inv_rho, rho2 * inv_rho, -n.z() * n.y() * inv_rho);
+		}
+		else
+		{
+			rec.tangent = Vector3(1.0, 0.0, 0.0);
+			rec.bitangent = cross(n, rec.tangent);
+		}
+		rec.has_tangent_space = true;
 	}
 
 	double pdf_value(const Point3& origin, const Vector3& direction) const override

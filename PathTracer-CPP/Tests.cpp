@@ -733,6 +733,45 @@ namespace
 		check(std::abs(env_only.probabilities(p, &n).env - 1.0) < 1e-12, "environment-only scene -> P(env) = 1");
 	}
 
+	void test_sphere_tangent_frame()
+	{
+		std::cout << "\n[geometry] sphere tangent frame for normal mapping\n";
+		rng::seed_thread(15);
+		double worst_ortho = 0.0, worst_hand = 0.0, worst_du = 0.0;
+		for (int i = 0; i < 20000; ++i)
+		{
+			const Vector3 n = random_unit_vector();
+			HitRecord rec;
+			Sphere::set_tangent_frame(n, rec);
+			worst_ortho = std::max({ worst_ortho, std::abs(dot(rec.tangent, n)), std::abs(dot(rec.bitangent, n)),
+				std::abs(dot(rec.tangent, rec.bitangent)), std::abs(rec.tangent.length() - 1.0), std::abs(rec.bitangent.length() - 1.0) });
+			worst_hand = std::max(worst_hand, (cross(rec.tangent, rec.bitangent) - n).length());
+
+			// T and B must point along +u and +v of get_sphere_uv (finite differences).
+			if (std::abs(n.y()) < 0.99)
+			{
+				double u0, v0, u1, v1, u2, v2;
+				Sphere::get_sphere_uv(n, u0, v0);
+				Sphere::get_sphere_uv(normalize(n + 1e-5 * rec.tangent), u1, v1);
+				Sphere::get_sphere_uv(normalize(n + 1e-5 * rec.bitangent), u2, v2);
+				double du = u1 - u0;
+				if (du > 0.5) du -= 1.0;
+				if (du < -0.5) du += 1.0;
+				if (!(du > 0.0 && std::abs(v1 - v0) < 1e-3 * std::abs(du) + 1e-9 && v2 - v0 > 0.0))
+					worst_du = std::max(worst_du, 1.0);
+			}
+		}
+		check(worst_ortho < 1e-9, "tangent / bitangent / normal orthonormal", "max error=" + fmt(worst_ortho, 12));
+		check(worst_hand < 1e-9, "cross(T, B) = N (right-handed, OpenGL convention)", "max error=" + fmt(worst_hand, 12));
+		check(worst_du == 0.0, "T follows +u and B follows +v of the sphere UV parameterization");
+
+		// End to end: a normal-mapped PBR material on a Sphere must actually tilt the shading normal.
+		const Sphere sphere(Point3(0, 0, 0), 1.0, nullptr);
+		HitRecord rec;
+		check(sphere.Hit(Ray(Point3(0.3, 0.2, 5.0), Vector3(0, 0, -1)), Interval(0.001, infinity), rec) && rec.has_tangent_space,
+			"Sphere::Hit provides a tangent space (Audit H6)");
+	}
+
 	void test_bsdf()
 	{
 		std::cout << "\n[bsdf] Lambert / phase function\n";
@@ -898,6 +937,7 @@ int run_unit_tests(const std::string& filter)
 		{ "environment", test_environment_pdf },
 		{ "light", test_light_pdf },
 		{ "lightsampler", test_light_sampler },
+		{ "tangent", test_sphere_tangent_frame },
 		{ "bsdf", test_bsdf },
 		{ "texture", test_texture_decode },
 		{ "determinism", test_determinism },
