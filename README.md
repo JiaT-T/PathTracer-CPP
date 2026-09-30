@@ -79,7 +79,7 @@
 
 ## 代表性场景
 
-场景入口位于 [D:\Computer Graphics\PathTracer\PathTracer-CPP\Renderer.cpp](D:/Computer%20Graphics/PathTracer/PathTracer-CPP/Renderer.cpp)，通过 `main()` 中的 `switch` 选择。
+场景入口位于 [`PathTracer-CPP/Renderer.cpp`](./PathTracer-CPP/Renderer.cpp)，通过 `--scene 1..19` 选择；默认场景为 `19`。
 
 当前与 PBR / IBL 相关的主要场景：
 
@@ -128,7 +128,7 @@
 - 每像素采样：`400`
 - 最大深度：`20`
 
-实测结果：
+作者记录的历史实测结果（不是本次清理重新测得；原记录未保存编译器版本、构建模式与原始日志）：
 
 - Serial：`65.3296 s`
 - Parallel：`29.9941 s`
@@ -144,7 +144,31 @@
 - MSVC
 - C++20
 
-### 构建方式
+### CMake 构建与快速验证
+
+安装 Visual Studio 2022 的 Desktop development with C++ workload 和 Windows SDK，以及 CMake 3.21+。依赖的 `stb_image` / `tinyobjloader` 已随源码提供，无需 vcpkg。
+
+在仓库根目录运行：
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+.\build\Release\PathTracer.exe --help
+.\build\Release\PathTracer.exe --scene 19
+# 快速运行同一个展示场景（资源 / HDR / 材质链路检查，无窗口）：
+.\build\Release\PathTracer.exe --scene 19 --quick
+# 重跑完整基准（耗时较长）：
+.\build\Release\PathTracer.exe --scene 15
+```
+
+`--smoke` 不需要模型/贴图，也不打开预览窗口：以 64×36、4 spp、深度 4 运行串行与并行渐进式 PBR 渲染，写出 raw / denoised PPM。这只验证运行链路，不代表原 Benchmark 或完整画质回归。
+
+`--quick` 将预览场景临时缩为 64 像素宽、4 spp、深度 4，不打开窗口；保留原场景的几何、材质和资源加载。基准场景 `15` 始终使用完整原始参数。
+
+默认展示场景为 1280×720、1000 spp、深度 25，渲染耗时取决于 CPU。程序从当前目录和可执行文件祖先目录定位 `PathTracer-CPP/images` / `Model`；复制到仓库之外运行时，用 `--assets` 指定包含 `images/`、`Model/` 的资源目录。
+
+### Visual Studio 工程
 
 可直接打开以下工程文件：
 
@@ -173,7 +197,9 @@
 - `PathTracer-CPP/images/`
 - 环境变量 `RTW_IMAGES` 指定目录
 
-OBJ 加载时会优先在模型目录内查找 `.mtl` 及其关联贴图。
+OBJ 加载时会优先在模型目录内查找 `.mtl` 及其关联贴图。`--assets` 也决定渲染输出目录。`RTW_IMAGES` 可以指向资源根目录（接受 `images/...` 名称）或图片目录（接受 `earthmap.jpg` 等名称）；完整展示建议使用 `--assets`。
+
+仓库提供 `Model/teapot.obj` 与 `Model/Obj_PBRTest/Sphere.obj`。旧场景 `11` / `13` / `14` 所用的 `dragon.obj` / `sponza.obj` / `sphere.obj` 未随仓库提供，需要自行取得有许可的模型；默认展示与基准不依赖这些模型。
 
 当前 README 展示场景主要使用：
 
@@ -208,3 +234,9 @@ OBJ 加载时会优先在模型目录内查找 `.mtl` 及其关联贴图。
 3. 处理 normal map 的黑槽 / shadow terminator 问题
 4. 为大场景资产补 triangulation 与 alpha cutout
 5. 再考虑更复杂材质层与更高质量输出格式
+
+## 参考与资源许可
+
+- 起点：[Ray Tracing in One Weekend](https://raytracing.github.io/) 教程系列。
+- OBJ 解析：[tinyobjloader](https://github.com/tinyobjloader/tinyobjloader)，许可证保留在 vendored header；图像加载：[stb](https://github.com/nothings/stb)，header 保留 MIT / public-domain 条款。
+- 资源来源与待确认许可见 [ASSETS.md](./ASSETS.md)。仓库 LICENSE 不会替代第三方资源的原始许可。
