@@ -1,5 +1,6 @@
 #pragma once
 #include "AABB.h"
+#include "Stats.h"
 
 class Material;
 
@@ -16,7 +17,10 @@ public :
 	double t = 0.0;
 	bool front_face = false;
 	bool has_tangent_space = false;
-	std::shared_ptr<Material> mat;
+	// Non-owning: the scene owns its materials for the whole render. A shared_ptr here cost an
+	// atomic increment/decrement on every primitive hit, and all threads contended on the same
+	// control blocks (Audit P-2).
+	const Material* mat = nullptr;
 	double u = 0.0;
 	double v = 0.0;
 

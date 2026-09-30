@@ -131,15 +131,19 @@
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="rtw_stb_image.cpp" />
     <ClCompile Include="Scenes.cpp" />
+    <ClCompile Include="Stats.cpp" />
     <ClCompile Include="Tests.cpp" />
     <ClCompile Include="tiny_obj_impl.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AABB.h" />
     <ClInclude Include="Benchmark.h" />
+    <ClInclude Include="BSDF.h" />
     <ClInclude Include="BVH.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="ImageIO.h" />
+    <ClInclude Include="Integrator.h" />
+    <ClInclude Include="Stats.h" />
     <ClInclude Include="LightSampler.h" />
     <ClInclude Include="Microfacet.h" />
     <ClInclude Include="Parallel.h" />

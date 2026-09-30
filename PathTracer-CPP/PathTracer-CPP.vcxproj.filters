@@ -36,6 +36,9 @@
     <ClCompile Include="Benchmark.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Stats.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Vector3.h">
@@ -132,6 +135,21 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Benchmark.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="LightSampler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Microfacet.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="BSDF.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Integrator.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Stats.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

@@ -31,6 +31,7 @@ public :
 
 	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
+		PT_COUNT_PRIMITIVE();
 		// No hit if the ray is parallel to the plane
 		auto denom = dot(n, ray.direction());
 		if(std::fabs(denom) < 1e-8) return false;
@@ -49,7 +50,7 @@ public :
 
 		rec.p = intersection;
 		rec.t = t;
-		rec.mat = mat;
+		rec.mat = mat.get();
 		rec.set_face_front(ray, n);
 
 		return true;

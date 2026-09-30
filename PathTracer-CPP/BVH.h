@@ -48,6 +48,7 @@ public :
 
 	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
+		PT_COUNT_BVH_NODE();
 		if (!bbox.hit(ray, ray_t))
 			return false;
 

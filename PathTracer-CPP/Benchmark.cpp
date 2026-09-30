@@ -12,6 +12,7 @@
 
 #include "Scenes.h"
 #include "Parallel.h"
+#include "Stats.h"
 
 namespace
 {
@@ -95,10 +96,12 @@ int run_benchmark(const BenchmarkOptions& options)
 		<< "| Build | " << build_mode() << " x64 |\n"
 		<< "| Repeat | best of " << std::max(1, options.repeat) << " |\n\n";
 
-	std::cout << "| Threads | Time (s) | Samples/s | Speedup | Efficiency |\n"
-		<< "|---:|---:|---:|---:|---:|\n" << std::flush;
+	std::cout << "| Threads | Time (s) | Samples/s | MRays/s | Speedup | Efficiency |\n"
+		<< "|---:|---:|---:|---:|---:|---:|\n" << std::flush;
 
 	double single_thread_seconds = 0.0;
+	RenderCounters counters;
+	uint64_t allocations_during_render = 0;
 	for (int requested : options.thread_list)
 	{
 		const int threads = parallel::resolve_thread_count(requested);
@@ -107,14 +110,17 @@ int run_benchmark(const BenchmarkOptions& options)
 		double best = 1e300;
 		for (int r = 0; r < std::max(1, options.repeat); ++r)
 		{
+			const uint64_t alloc_before = heap_allocation_count();
 			const auto start = std::chrono::steady_clock::now();
 			if (scene.use_lights)
 				cam.Render(scene.world, scene.lights);
 			else
 				cam.Render(scene.world);
 			const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+			allocations_during_render = heap_allocation_count() - alloc_before;
 			best = std::min(best, seconds);
 		}
+		counters = cam.LastCounters(); // identical for every thread count (deterministic)
 
 		if (threads == 1)
 			single_thread_seconds = best;
@@ -122,9 +128,23 @@ int run_benchmark(const BenchmarkOptions& options)
 		std::cout << "| " << threads
 			<< " | " << std::fixed << std::setprecision(3) << best
 			<< " | " << std::setprecision(0) << total_samples / best
+			<< " | " << std::setprecision(2) << counters.total_rays() / best * 1e-6
 			<< " | " << std::setprecision(2) << (speedup > 0 ? speedup : 0.0) << "x"
 			<< " | " << std::setprecision(1) << (speedup > 0 ? 100.0 * speedup / threads : 0.0) << "% |\n"
 			<< std::defaultfloat << std::flush;
 	}
+
+	const double paths = static_cast<double>(std::max<uint64_t>(1, counters.camera_rays));
+	const double rays = static_cast<double>(std::max<uint64_t>(1, counters.total_rays()));
+	std::cout << "\n| Counter | Total | Per camera path |\n|---|---:|---:|\n" << std::fixed << std::setprecision(3)
+		<< "| Primary rays | " << counters.camera_rays << " | 1 |\n"
+		<< "| Continuation rays | " << counters.bounce_rays << " | " << counters.bounce_rays / paths << " |\n"
+		<< "| Shadow rays | " << counters.shadow_rays << " | " << counters.shadow_rays / paths << " |\n"
+		<< "| Total rays | " << counters.total_rays() << " | " << counters.total_rays() / paths << " |\n"
+		<< "| Scattering vertices (avg path length) | " << counters.path_vertices << " | " << counters.path_vertices / paths << " |\n"
+		<< "| BVH node visits (ray-AABB tests) | " << counters.bvh_nodes << " | " << counters.bvh_nodes / rays << " per ray |\n"
+		<< "| Primitive tests | " << counters.primitive_tests << " | " << counters.primitive_tests / rays << " per ray |\n"
+		<< "| Heap allocations during last render | " << allocations_during_render << " | "
+		<< allocations_during_render / paths << " |\n" << std::defaultfloat;
 	return 0;
 }

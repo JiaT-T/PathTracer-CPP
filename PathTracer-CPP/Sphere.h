@@ -28,6 +28,7 @@ public :
 
 	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
+		PT_COUNT_PRIMITIVE();
 		Point3 curr_center = center.at(ray.time());
 		Vector3 oc = curr_center - ray.origin();
 		auto a = ray.direction().length_squared();
@@ -54,7 +55,7 @@ public :
 		rec.p = ray.at(rec.t);
 		Vector3 outward_normal = (rec.p - curr_center) / radius;
 		rec.set_face_front(ray, outward_normal);
-		rec.mat = mat;
+		rec.mat = mat.get();
 		get_sphere_uv(outward_normal, rec.u, rec.v);
 		set_tangent_frame(outward_normal, rec);
 

@@ -3,50 +3,20 @@
 #include "Hittable.h"
 #include "My_Common.h"
 #include "Texture.h"
-#include "PDF.h"
-#include "Microfacet.h"
-
-class Scattered_Record
-{
-public :
-	Color attenuation = Color(1.0, 1.0, 1.0);
-	std::shared_ptr<PDF> p_pdf;
-	// Delta materials like mirror/glass skip normal PDF sampling and provide a final ray directly.
-	bool skip_pdf = false;
-	Ray skip_pdf_ray;
-	// Normal used by the integrator for the |cos(theta)| term. It must be the same normal the
-	// material uses in Eval()/PDF (e.g. the normal-mapped shading normal). The integrator
-	// initializes it to rec.n before Scatter().
-	Vector3 cosine_normal;
-	// Phase functions (participating media) have no cosine foreshortening term.
-	bool apply_cosine = true;
-};
-
-
+#include "BSDF.h"
 
 class Material
 {
 public:
 	virtual ~Material() = default;
 
-	// Scatter chooses the next-ray sampling strategy
-	// It returns false if the ray should be absorbed and true if it should be scattered.
-	virtual bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const { return false; }
+	// Builds the scattering function at a hit point. Returns false if the path is absorbed
+	// (e.g. emitters, or a fuzzy mirror that scatters below the surface). Delta materials
+	// (mirror, glass) choose their direction here and return BSDF::delta().
+	virtual bool GetBSDF(const Ray& ray_in, const HitRecord& rec, BSDF& bsdf) const { return false; }
 
 	// Emitted returns the emitted radiance for a ray hitting the material. Default is no emission
 	virtual Color emitted(const Ray& ray_in, const HitRecord& rec, double u, double v, const Point3& p) const { return Color(0, 0, 0); }
-
-	// Eval evaluates the BRDF value for the given incoming and outgoing rays. Default is black (no reflection)
-	virtual Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return Color(0, 0, 0); }
-
-	// PDF evaluates the PDF value for the given incoming and outgoing rays. Default is 0 (no reflection)
-	virtual double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const { return 0; }
-	virtual Vector3 ShadingNormal(const HitRecord& rec) const { return rec.n; }
-
-	// 0.0 : Only prefer light sampling
-	// 0.5 : No preference
-	// 1.0 : Only prefer BSDF sampling
-	virtual double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const { return 0.5; }
 
 	// Returns "How much light is emitted from the material at the given point (u, v, p)"
 	virtual double EmissionLuminance(double u, double v, const Point3& p) const
@@ -68,28 +38,12 @@ public :
 	Lambertian(const Color& albedo) : tex(std::make_shared<Solid_Color>(albedo)) {}
 	Lambertian(std::shared_ptr<Texture> tex) : tex(tex) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
+	bool GetBSDF(const Ray& ray_in, const HitRecord& rec, BSDF& bsdf) const override
 	{
-		s_rec.attenuation = Color(1.0, 1.0, 1.0);
-		s_rec.p_pdf = std::make_shared<Cosine_PDF>(rec.n);
-		s_rec.skip_pdf = false;
+		bsdf = BSDF::lambert(rec.n, tex->value(rec.u, rec.v, rec.p));
 		return true;
 	}
 
-	Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
-	{
-		auto cos_theta = dot(rec.n, normalize(scattered.direction()));
-		if (cos_theta <= 0)
-			return Color(0, 0, 0);
-
-		return tex->value(rec.u, rec.v, rec.p) / pi;
-	}
-
-	double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
-	{
-		auto cos_theta = dot(rec.n, normalize(scattered.direction()));
-		return cos_theta <= 0 ? 0 : cos_theta / pi;
-	}
 	Color Albedo(double u, double v, const Point3& p) const override
 	{
 		return tex->value(u, v, p);
@@ -106,16 +60,16 @@ class Metal : public Material
 public :
 	Metal(const Color& albedo, double fuzz) : albedo(albedo), fuzz(fuzz < 1 ? fuzz : 1) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
+	bool GetBSDF(const Ray& ray_in, const HitRecord& rec, BSDF& bsdf) const override
 	{
 		Vector3 reflected = reflect(ray_in.direction(), rec.n);
 		reflected = normalize(reflected) + fuzz * random_unit_vector();
+		// A fuzzed reflection below the surface is absorbed, as in the original RTIOW Metal;
+		// otherwise the ray continues inside the object (Audit M8).
+		if (dot(reflected, rec.n) <= 0.0)
+			return false;
 
-		s_rec.attenuation = albedo;
-		s_rec.p_pdf = nullptr;
-		s_rec.skip_pdf = true;
-		s_rec.skip_pdf_ray = Ray(rec.p, reflected, ray_in.time());
-
+		bsdf = BSDF::delta(reflected, albedo);
 		return true;
 	}
 	Color Albedo(double u, double v, const Point3& p) const override
@@ -135,12 +89,9 @@ class Dielectric : public Material
 public : 
 	Dielectric(double ri) : refraction_index(ri) {};
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
+	bool GetBSDF(const Ray& ray_in, const HitRecord& rec, BSDF& bsdf) const override
 	{
 		// The glass surface absorbs nothing
-		s_rec.attenuation = Color(1.0, 1.0, 1.0);
-		s_rec.p_pdf = nullptr;
-		s_rec.skip_pdf = true;
 		double ri = rec.front_face ? (1.0 / refraction_index) : refraction_index;
 
 		Vector3 unit_direction = normalize(ray_in.direction());
@@ -154,7 +105,7 @@ public :
 		else
 			direction = refract(unit_direction, rec.n, ri);
 
-		s_rec.skip_pdf_ray = Ray(rec.p, direction, ray_in.time());
+		bsdf = BSDF::delta(direction, Color(1.0, 1.0, 1.0));
 		return true;
 	}
 
@@ -203,24 +154,17 @@ public :
 	isotropic(const Color& albedo) : tex(std::make_shared<Solid_Color>(albedo)) {}
 	isotropic(std::shared_ptr<Texture> tex) : tex(tex) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
+	// Isotropic phase function: f = albedo / (4 pi), no cosine term (rec.n of a medium hit is
+	// arbitrary), sampled uniformly over the sphere (Audit F2 / F3).
+	bool GetBSDF(const Ray& ray_in, const HitRecord& rec, BSDF& bsdf) const override
 	{
-		s_rec.attenuation = Color(1.0, 1.0, 1.0);
-		s_rec.p_pdf = std::make_shared<Sphere_PDF>();
-		s_rec.skip_pdf = false;
-		// rec.n of a medium hit is arbitrary; the phase function integral has no cosine.
-		s_rec.apply_cosine = false;
+		bsdf = BSDF::phase(tex->value(rec.u, rec.v, rec.p));
 		return true;
 	}
 
-	Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
+	Color Albedo(double u, double v, const Point3& p) const override
 	{
-		return tex->value(rec.u, rec.v, rec.p) * (1.0 / (4.0 * pi));
-	}
-
-	double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
-	{
-		return 1.0 / (4.0 * pi);
+		return tex->value(u, v, p);
 	}
 
 private :
@@ -253,125 +197,17 @@ public :
 		  metallic_tex(metallic_tex),
 		  normal_map_convention(normal_map_convention) {}
 
-	bool Scatter(const Ray& ray_in, const HitRecord& rec, Scattered_Record& s_rec) const override
+	bool GetBSDF(const Ray& ray_in, const HitRecord& rec, BSDF& bsdf) const override
 	{
-		// Use a mixed PDF: cosine sampling for diffuse and GGX sampling for the specular lobe.
+		// All textures are sampled once per hit; eval / pdf / sample only do math afterwards.
 		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
 		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
-		const double specular_weight = compute_specular_weight(metallic);
-		const double diffuse_weight = 1.0 - specular_weight;
-		const Vector3 view_dir = normalize(-ray_in.direction());
-		const Vector3 n = corrected_shading_normal(rec, view_dir);
-
-		s_rec.attenuation = Color(1.0, 1.0, 1.0);
-		auto diffuse_pdf = std::make_shared<Cosine_PDF>(n);
-		auto specular_pdf = std::make_shared<GGX_PDF>(n, view_dir, roughness);
-
-		s_rec.p_pdf = std::make_shared<Mixture_PDF>(diffuse_pdf, specular_pdf, diffuse_weight);
-		s_rec.skip_pdf = false;
-		// Eval()/PDF use the (normal-mapped, view-corrected) shading normal, so the cosine must too.
-		s_rec.cosine_normal = n;
-		return true;
-	}
-
-	Color Eval(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
-	{
-		// Evaluate the actual BRDF value for the sampled direction.
-		const Vector3 v = normalize(-ray_in.direction());
-		const Vector3 l = normalize(scattered.direction());
-		const Vector3 n = corrected_shading_normal(rec, v);
-		// Sidedness uses the geometric normal (light leaks); shading uses n. Using the interpolated
-		// normal here blackens smooth-mesh silhouettes where rec.n . v < 0 < geo_n . v.
-		const double g_dot_l = std::max(dot(rec.geo_n, l), 0.0);
-		const double g_dot_v = std::max(dot(rec.geo_n, v), 0.0);
-		if (g_dot_l <= 0.0 || g_dot_v <= 0.0)
-			return Color(0, 0, 0);
-		const double n_dot_l = std::max(dot(n, l), 1e-4);
-		const double n_dot_v = std::max(dot(n, v), 1e-4);
-
 		const Color base_color = sample_color(base_tex, rec);
-		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
-		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
-		return evaluate_brdf(n, v, l, n_dot_v, n_dot_l, base_color, roughness, metallic);
-	}
-
-	// Metallic-roughness BRDF (without the cosine term).
-	//
-	// Specular: Cook-Torrance D * G2 * F / (4 n.v n.l) with the height-correlated Smith G2 of
-	// the same GGX model the VNDF sampler uses (ggx::G2), so f * cos / pdf_vndf = F * G2 / G1(v).
-	//
-	// Diffuse: base / pi * (1 - m) * (1 - F(n.v)) (1 - F(n.l)) / (1 - F_avg). The previous
-	// kd = 1 - F(v.h) used the per-microfacet Fresnel for the diffuse layer and reflected more
-	// energy than it received at grazing angles (white furnace 1.06). This coupled form is
-	// reciprocal, and its directional albedo is exactly base * (1 - m) * (1 - F(n.v)), i.e. the
-	// diffuse layer only receives the energy the Fresnel interface transmits.
-	static Color evaluate_brdf(
-		const Vector3& n, const Vector3& v, const Vector3& l,
-		double n_dot_v, double n_dot_l,
-		const Color& base_color, double roughness, double metallic)
-	{
-		const double alpha = roughness * roughness;
-		const Color dielectric_f0(0.04, 0.04, 0.04);
-		// F0 is 0.04 for dielectric and becomes base color for metals.
-		const Color f0 = lerp(dielectric_f0, base_color, metallic);
-
-		const Vector3 h = normalize(v + l);
-		const double n_dot_h = dot(n, h);
-		const double v_dot_h = std::max(dot(v, h), 0.0);
-		const Color F = ggx::fresnel_schlick(v_dot_h, f0);
-		const double D = ggx::D(n_dot_h, alpha);
-		const double G = ggx::G2(n_dot_v, n_dot_l, alpha);
-		const Color specular = F * (D * G / (4.0 * n_dot_v * n_dot_l));
-
-		if (metallic >= 1.0)
-			return specular;
-
-		// Energy-conserving diffuse under the specular layer: it only receives the energy the
-		// specular lobe does not reflect, 1 - E_spec(mu), in both directions.
-		const ggx::SpecularAlbedoTable& table = ggx::SpecularAlbedoTable::get();
-		const Color one(1.0, 1.0, 1.0);
-		const Color transmit_v = one - table.albedo(n_dot_v, roughness, f0);
-		const Color transmit_l = one - table.albedo(n_dot_l, roughness, f0);
-		const Color avg = one - table.average(roughness, f0);
-		const Color diffuse_norm(std::max(avg.x(), 1e-6), std::max(avg.y(), 1e-6), std::max(avg.z(), 1e-6));
-		const Color diffuse = (1.0 - metallic) * base_color * transmit_v * transmit_l / (pi * diffuse_norm);
-
-		return diffuse + specular;
-	}
-
-	double PDF(const Ray& ray_in, const HitRecord& rec, const Ray& scattered) const override
-	{
-		// Keep the PDF weights matched with Scatter(), otherwise MIS becomes biased.
-		const double roughness = sample_scalar(roughness_tex, rec, 1.0, 0.05, 1.0);
-		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
-		const double specular_weight = compute_specular_weight(metallic);
-		const double diffuse_weight = 1.0 - specular_weight;
-		const Vector3 n = corrected_shading_normal(rec, normalize(-ray_in.direction()));
-		const Cosine_PDF diffuse_pdf(n);
-		const GGX_PDF specular_pdf(n, normalize(-ray_in.direction()), roughness);
-
-		return diffuse_weight * diffuse_pdf.value(scattered.direction()) + 
-			   specular_weight * specular_pdf.value(scattered.direction());
-	}
-
-	Vector3 ShadingNormal(const HitRecord& rec) const override
-	{
-		return sample_shading_normal(rec);
-	}
-
-	double BSDFSamplingPreference(const Ray& ray_in, const HitRecord& rec) const override
-	{
-		const double roughness = sample_scalar(roughness_tex, rec, 0.5, 0.05, 1.0);
-		const double metallic = sample_scalar(metallic_tex, rec, 0.0, 0.0, 1.0);
-
-		const double specular_weight = compute_specular_weight(metallic);
-		const double gloss_factor = 1.0 - roughness;
-
-		// Not a strict formula
-		// but a heuristic which thinks metals and glossy surfaces should prefer BSDF sampling more than diffuse surfaces
-		const double preference = 0.15 + 0.55 * specular_weight + 0.20 * gloss_factor;
-
-		return std::clamp(preference, 0.1, 0.9);
+		const Vector3 view_dir = normalize(-ray_in.direction());
+		// Eval / pdf / cosine all use the (normal-mapped, view-corrected) shading normal (F4).
+		const Vector3 n = corrected_shading_normal(rec, view_dir);
+		bsdf = BSDF::pbr(view_dir, n, rec.geo_n, base_color, roughness, metallic);
+		return true;
 	}
 
 	Color Albedo(double u, double v, const Point3& p) const override
@@ -467,12 +303,6 @@ private:
 		Vector3 n = sample_shading_normal(rec);
 		n = correct_shading_normal_to_direction(n, rec.geo_n, view_dir);
 		return n;
-	}
-
-	static double compute_specular_weight(double metallic)
-	{
-		// Heuristic for choosing diffuse or specular samples; it is not part of the BRDF value.
-		return std::clamp(0.5 + 0.5 * metallic, 0.0, 1.0);
 	}
 
 	std::shared_ptr<Texture> base_tex;

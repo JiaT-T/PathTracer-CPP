@@ -28,6 +28,8 @@
 #include "Parallel.h"
 #include "LightSampler.h"
 #include "Hittable_List.h"
+#include "Integrator.h"
+#include "Stats.h"
 
 // ============================================================================================
 // Minimal test harness
@@ -235,7 +237,7 @@ namespace
 		q.rec.u = 0.5;
 		q.rec.v = 0.5;
 		q.rec.t = 1.0;
-		q.rec.mat = q.material;
+		q.rec.mat = q.material.get();
 		q.ray_in = Ray(q.rec.p + q.wo, -q.wo, 0.0);
 		return q;
 	}
@@ -250,70 +252,42 @@ namespace
 		double cos = 0.0; // foreshortening term used by the integrator
 	};
 
-	// Wraps one surface query; the (deterministic) sampling strategy is built once.
+	// Wraps the BSDF the integrator builds for one surface query (Material::GetBSDF).
 	class BsdfUnderTest
 	{
 	public:
 		explicit BsdfUnderTest(const SurfaceQuery& q) : q(q)
 		{
-			s_rec.cosine_normal = q.rec.n;
-			scatters = q.material->Scatter(q.ray_in, q.rec, s_rec);
+			scatters = q.material->GetBSDF(q.ray_in, q.rec, bsdf);
 		}
 
-		Color eval(const Vector3& wi) const
-		{
-			if (!scatters || s_rec.skip_pdf)
-				return Color(0, 0, 0);
-			return s_rec.attenuation * q.material->Eval(q.ray_in, q.rec, Ray(q.rec.p, wi));
-		}
-
-		double cosine(const Vector3& wi) const
-		{
-			if (!s_rec.apply_cosine)
-				return 1.0;
-			return std::max(dot(s_rec.cosine_normal, normalize(wi)), 0.0);
-		}
-
-		double pdf(const Vector3& wi) const
-		{
-			if (!scatters || s_rec.skip_pdf || !s_rec.p_pdf)
-				return 0.0;
-			return s_rec.p_pdf->value(wi);
-		}
+		Color eval(const Vector3& wi) const { return scatters ? bsdf.eval(wi) : Color(0, 0, 0); }
+		double cosine(const Vector3& wi) const { return bsdf.cosine(wi); }
+		double pdf(const Vector3& wi) const { return scatters ? bsdf.pdf(wi) : 0.0; }
 
 		BsdfSampleResult sample() const
 		{
 			BsdfSampleResult r;
 			if (!scatters)
 				return r;
-			if (s_rec.skip_pdf)
-			{
-				// Delta events choose their direction inside Scatter(); re-run it.
-				Scattered_Record delta_rec;
-				delta_rec.cosine_normal = q.rec.n;
-				if (!q.material->Scatter(q.ray_in, q.rec, delta_rec))
-					return r;
-				r.valid = true;
-				r.delta = true;
-				r.wi = normalize(delta_rec.skip_pdf_ray.direction());
-				r.f = delta_rec.attenuation;
+			BSDFSample s;
+			if (!bsdf.sample(s))
 				return r;
-			}
-			r.wi = normalize(s_rec.p_pdf->generate());
-			r.pdf = s_rec.p_pdf->value(r.wi);
-			if (r.pdf <= 0.0)
-				return r;
-			r.f = eval(r.wi);
-			r.cos = cosine(r.wi);
 			r.valid = true;
+			r.delta = s.delta;
+			r.wi = normalize(s.wi);
+			r.f = s.f;
+			r.pdf = s.pdf;
+			r.cos = s.delta ? 1.0 : bsdf.cosine(s.wi);
 			return r;
 		}
 
-		bool applies_cosine() const { return s_rec.apply_cosine; }
+		bool applies_cosine() const { return bsdf.applies_cosine(); }
+		const BSDF& get() const { return bsdf; }
 
 	private:
 		SurfaceQuery q;
-		Scattered_Record s_rec;
+		BSDF bsdf;
 		bool scatters = false;
 	};
 
@@ -468,7 +442,7 @@ namespace
 			check(c.p_value > 0.01, "Cosine_PDF sample/pdf chi2", "chi2=" + fmt(c.chi2, 1) + " dof=" + std::to_string(c.dof) + " p=" + fmt(c.p_value, 3));
 		}
 		{
-			const Sphere_PDF p;
+			const Sphere_PDF p{};
 			const double integral = integrate_sphere_centered(n, 400, 128, [&](const Vector3& w) { return p.value(w); });
 			check(std::abs(integral - 1.0) < 1e-3, "Sphere_PDF integral = 1 (was 4 before fix F2)", "integral=" + fmt(integral));
 			const Chi2Result c = chi2_test(n, [&](Vector3& w) { w = p.generate(); return true; }, [&](const Vector3& w) { return p.value(w); }, 1000000);
@@ -841,6 +815,25 @@ namespace
 			}
 		}
 
+		// Full PBR mixture (energy-based lobe selection + cosine + VNDF): the directions produced
+		// by BSDF::sample() follow BSDF::pdf(), including the invalid-sample mass.
+		for (double metallic : { 0.0, 0.5, 1.0 })
+		{
+			for (double r : { 0.3, 0.8 })
+			{
+				for (double cv : { 0.9, 0.3 })
+				{
+					const BsdfUnderTest bsdf(make_query(solid_pbr(Color(0.8, 0.6, 0.4), r, metallic), n, view_dir_for_cos(cv)));
+					const Chi2Result c = chi2_test(n,
+						[&](Vector3& w) { const BsdfSampleResult s = bsdf.sample(); w = s.wi; return s.valid; },
+						[&](const Vector3& w) { return bsdf.pdf(w); }, 1000000);
+					check(c.p_value > 0.01, "BSDF::sample follows BSDF::pdf (chi2) m=" + fmt(metallic, 1) + " r=" + fmt(r, 1) + " cos_v=" + fmt(cv, 1),
+						"chi2=" + fmt(c.chi2, 1) + " dof=" + std::to_string(c.dof) + " p=" + fmt(c.p_value, 3)
+						+ " p_spec=" + fmt(bsdf.get().specular_probability(), 3));
+				}
+			}
+		}
+
 		// Reciprocity (no normal map): f(wo, wi) = f(wi, wo).
 		rng::seed_thread(22);
 		double worst = 0.0;
@@ -926,6 +919,85 @@ namespace
 		check(identical(a, b) && identical(a, c), "same seed -> bit-identical image for 1 / 3 / all threads");
 		check(!identical(a, d), "different seed -> different image");
 	}
+
+	void test_hot_path_allocations()
+	{
+		std::cout << "\n[perf] heap allocations in the path-tracing hot path (Audit P-1)\n";
+		for (const char* name : { "cornell_small", "normal_map_small", "environment_small", "volume_small" })
+		{
+			const SceneEntry* entry = find_scene(name);
+			rng::seed_thread(3);
+			SceneDesc scene = entry->build();
+			LightSampler sampler;
+			sampler.build(&scene.lights, scene.cam.GetEnvironment().get());
+			PathIntegrator::Settings settings;
+			settings.max_depth = 16;
+			const PathIntegrator integrator(scene.world, sampler, scene.cam.GetEnvironment().get(), Color(0, 0, 0), settings);
+			const Point3 origin = scene.cam.lookfrom;
+			const Vector3 forward = normalize(scene.cam.lookat - scene.cam.lookfrom);
+			integrator.Li(Ray(origin, forward)); // warm-up (static tables)
+
+			const uint64_t before = heap_allocation_count();
+			const int rays = 20000;
+			double sink = 0.0;
+			for (int k = 0; k < rays; ++k)
+			{
+				rng::begin_pixel_sample(1, k, 0);
+				const Vector3 jitter(random_double(-0.3, 0.3), random_double(-0.3, 0.3), random_double(-0.3, 0.3));
+				sink += integrator.Li(Ray(origin, normalize(forward + jitter))).x();
+			}
+			const uint64_t allocations = heap_allocation_count() - before;
+			check(allocations == 0, std::string("zero heap allocations per camera path: ") + name,
+				std::to_string(allocations) + " allocations for " + std::to_string(rays) + " paths (sink " + fmt(sink / rays, 3) + ")");
+		}
+	}
+
+	void test_russian_roulette()
+	{
+		std::cout << "\n[render] Russian roulette is unbiased\n";
+		// Deep diffuse interreflection (Cornell box) and a scattering medium, rendered with and
+		// without RR. Means must agree within the Monte Carlo error; RR must shorten paths.
+		for (const char* name : { "cornell_small", "volume_small" })
+		{
+			auto render = [&](bool rr, uint64_t seed, RenderCounters& counters)
+			{
+				const SceneEntry* entry = find_scene(name);
+				rng::seed_thread(99);
+				SceneDesc scene = entry->build();
+				scene.cam.image_width = 32;
+				scene.cam.sample_per_pixel = 256;
+				scene.cam.max_depth = 64;
+				scene.cam.russian_roulette = rr;
+				scene.cam.seed = seed;
+				scene.cam.write_outputs = false;
+				scene.cam.verbose = false;
+				scene.cam.Render(scene.world, scene.lights);
+				counters = scene.cam.LastCounters();
+				return scene.cam.LastFramebuffer();
+			};
+			RenderCounters c_off, c_on;
+			const auto off = render(false, 7, c_off);
+			const auto on = render(true, 8, c_on);
+			// Standard error of the image mean from the per-pixel differences.
+			double sum_d = 0.0, sum_d2 = 0.0;
+			for (size_t i = 0; i < off.size(); ++i)
+			{
+				const double d = (on[i].x() + on[i].y() + on[i].z() - off[i].x() - off[i].y() - off[i].z()) / 3.0;
+				sum_d += d;
+				sum_d2 += d * d;
+			}
+			const double n_px = static_cast<double>(off.size());
+			const double mean_d = sum_d / n_px;
+			const double se = std::sqrt(std::max(0.0, sum_d2 / n_px - mean_d * mean_d) / n_px);
+			const double mean_off = image_mean(off);
+			check(std::abs(mean_d) < 4.0 * se + 1e-4, std::string("RR on/off image means agree: ") + name,
+				"mean off=" + fmt(mean_off, 5) + " on=" + fmt(image_mean(on), 5) + " diff=" + fmt(mean_d, 5) + " +- " + fmt(se, 5));
+			const double len_off = static_cast<double>(c_off.path_vertices) / c_off.camera_rays;
+			const double len_on = static_cast<double>(c_on.path_vertices) / c_on.camera_rays;
+			check(len_on < len_off, std::string("RR shortens paths: ") + name,
+				"vertices/path off=" + fmt(len_off, 2) + " on=" + fmt(len_on, 2));
+		}
+	}
 }
 
 int run_unit_tests(const std::string& filter)
@@ -941,6 +1013,8 @@ int run_unit_tests(const std::string& filter)
 		{ "bsdf", test_bsdf },
 		{ "texture", test_texture_decode },
 		{ "determinism", test_determinism },
+		{ "roulette", test_russian_roulette },
+		{ "alloc", test_hot_path_allocations },
 	};
 
 	for (const Entry& t : tests)

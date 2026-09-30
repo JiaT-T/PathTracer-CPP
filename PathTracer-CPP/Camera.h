@@ -12,29 +12,16 @@
 #include "Hittable_List.h"
 #include "My_Common.h"
 #include "Material.h"
-#include "PDF.h"
 #include "PPMPreviewWindow.h"
 #include "Environment.h"
 #include "PostProcess.h"
 #include "ImageIO.h"
 #include "Parallel.h"
+#include "LightSampler.h"
+#include "Integrator.h"
+#include "Stats.h"
 
-static double power_heuristic(double pdf_a, double pdf_b)
-{
-	// Balance two estimators for MIS. Squared PDFs give the power heuristic.
-	double a2 = pdf_a * pdf_a;
-	double b2 = pdf_b * pdf_b;
-	double denom = a2 + b2;
-	return a2 <= 0.0 ? 0.0 : a2 / denom;
-}
-
-static double power_heuristic(double pdf_a, int sample_count_a, double pdf_b, int sample_count_b)
-{
-	const double weighted_a = sample_count_a * pdf_a;
-	const double weighted_b = sample_count_b * pdf_b;
-	return power_heuristic(weighted_a, weighted_b);
-}
-
+// Camera model + render loop. Radiance estimation lives in PathIntegrator (Integrator.h).
 class Camera
 {
 public : 
@@ -60,6 +47,11 @@ public :
 	std::string output_filename = "image.ppm";
 	Render_Mode render_mode = Render_Mode::Parallel;
 	Progressive_Output_Mode progressive_output_mode = Progressive_Output_Mode::Denoised;
+
+	// Integrator
+	int first_bounce_light_samples = 4;
+	bool russian_roulette = true;
+	int rr_start_bounce = 3;
 
 	// Reproducibility / execution
 	uint64_t seed = 1;          // Global seed; every (pixel, sample) stream is derived from it
@@ -104,45 +96,32 @@ public :
 	const std::vector<PixelGuide>& LastGuide() const { return guide_buffer; }
 	uint64_t LastNonFiniteSamples() const { return last_non_finite_samples; }
 	int LastSampleCount() const { return last_sample_count; }
+	const RenderCounters& LastCounters() const { return last_counters; }
 
 	// Ver.1: no explicit light list (pure BSDF sampling; emission found by chance).
 	void Render(const Hittable& world, PPMPreviewWindow* preview = nullptr)
 	{
-		render_image(
-			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world); },
-			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
-			preview,
-			false);
+		light_sampler.build(nullptr, nullptr);
+		render_image(world, preview, false);
 	}
 
 	// Ver.2: next-event estimation towards `lights` (+ environment) with MIS.
-	void Render(const Hittable_List& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
+	void Render(const Hittable& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
 	{
 		light_sampler.build(&lights, environment.get());
-		render_image(
-			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world, lights); },
-			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
-			preview,
-			false);
+		render_image(world, preview, false);
 	}
 
 	void RenderProgressive(const Hittable& world, PPMPreviewWindow* preview = nullptr)
 	{
-		render_image(
-			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world); },
-			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
-			preview,
-			true);
+		light_sampler.build(nullptr, nullptr);
+		render_image(world, preview, true);
 	}
 
-	void RenderProgressive(const Hittable_List& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
+	void RenderProgressive(const Hittable& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
 	{
 		light_sampler.build(&lights, environment.get());
-		render_image(
-			[&](int i, int j, int sample_index) { return ray_color(get_ray(i, j, sample_index), max_depth, world, lights); },
-			[&](int i, int j) { return trace_pixel_data(get_center_ray(i, j), world); },
-			preview,
-			true);
+		render_image(world, preview, true);
 	}
 
 private :
@@ -162,10 +141,21 @@ private :
 	std::vector<PixelGuide> guide_buffer;
 	uint64_t last_non_finite_samples = 0;
 	int last_sample_count = 0;
+	RenderCounters last_counters;
 
 	int resolved_thread_count() const
 	{
 		return render_mode == Render_Mode::Serial ? 1 : parallel::resolve_thread_count(thread_count);
+	}
+
+	PathIntegrator make_integrator(const Hittable& world) const
+	{
+		PathIntegrator::Settings settings;
+		settings.max_depth = max_depth;
+		settings.first_bounce_light_samples = first_bounce_light_samples;
+		settings.russian_roulette = russian_roulette;
+		settings.rr_start_bounce = rr_start_bounce;
+		return PathIntegrator(world, light_sampler, environment.get(), background, settings);
 	}
 
 	// Shared render loop.
@@ -176,14 +166,10 @@ private :
 	//
 	// progressive = true: several passes (preview refresh between passes), then the denoiser.
 	// progressive = false: one pass with all samples, no denoising.
-	template <typename SampleShader, typename GuideShader>
-	void render_image(
-		SampleShader&& sample_shader,
-		GuideShader&& guide_shader,
-		PPMPreviewWindow* preview,
-		bool progressive)
+	void render_image(const Hittable& world, PPMPreviewWindow* preview, bool progressive)
 	{
 		initialize();
+		const PathIntegrator integrator = make_integrator(world);
 
 		const bool writes_denoised_output =
 			progressive && progressive_output_mode != Progressive_Output_Mode::Raw;
@@ -209,6 +195,8 @@ private :
 		const int total_samples = std::max(1, sample_per_pixel);
 		const int threads = resolved_thread_count();
 		std::atomic<uint64_t> non_finite_samples{ 0 };
+		RenderCounters counters_total;
+		std::mutex counters_mutex;
 
 		auto preview_start_time = std::chrono::steady_clock::now();
 		if (preview)
@@ -234,6 +222,7 @@ private :
 
 			parallel::parallel_for(static_cast<int>(tiles.size()), threads, [&](int tile_index, int)
 			{
+				thread_counters() = RenderCounters{};
 				const RenderTile& tile = tiles[static_cast<size_t>(tile_index)];
 				for (int j = tile.y_begin; j < tile.y_end; j++)
 				{
@@ -244,14 +233,14 @@ private :
 						{
 							// The guide ray may hit a medium, which consumes random numbers.
 							rng::begin_pixel_sample(seed ^ 0xA5A5A5A5A5A5A5A5ull, index, 0);
-							guide_buffer[index] = guide_shader(i, j);
+							guide_buffer[index] = trace_pixel_data(get_center_ray(i, j), world);
 						}
 
 						Color sum = accumulation[index];
 						for (int s = s_begin; s < s_end; ++s)
 						{
 							rng::begin_pixel_sample(seed, index, static_cast<uint64_t>(s));
-							const Color c = sample_shader(i, j, s);
+							const Color c = integrator.Li(get_ray(i, j, s));
 							if (!std::isfinite(c.x()) || !std::isfinite(c.y()) || !std::isfinite(c.z()))
 							{
 								// A single NaN/Inf would poison the pixel forever; drop it and count it.
@@ -264,6 +253,11 @@ private :
 						framebuffer[index] = sum / static_cast<double>(s_end);
 						guide_buffer[index].sample_count = s_end;
 					}
+				}
+
+				{
+					std::lock_guard<std::mutex> lock(counters_mutex);
+					counters_total += thread_counters();
 				}
 
 				if (verbose && !show_passes)
@@ -301,6 +295,7 @@ private :
 
 		last_non_finite_samples = non_finite_samples.load();
 		last_sample_count = total_samples;
+		last_counters = counters_total;
 		if (verbose && last_non_finite_samples > 0)
 			std::clog << "\nWarning: dropped " << last_non_finite_samples << " non-finite samples.\n";
 
@@ -491,296 +486,6 @@ private :
 		return camera_center + (p[0] * defocus_disk_u) + (p[1] * defocus_disk_v);
 	}
 
-	// Ver.1
-	Color ray_color(const Ray& ray, const int depth, const Hittable& world)
-	{
-		return ray_color(ray, depth, world, true);
-	}
-
-	// Ver.2
-	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights)
-	{
-		return ray_color(ray, depth, world, lights, true);
-	}
-
-	int first_bounce_samples = 4;
-
-	// Foreshortening term of the rendering equation. Uses the same normal as the material's
-	// Eval()/PDF, and is 1 for phase functions (volumes have no meaningful surface normal).
-	static double scatter_cosine(const Scattered_Record& s_rec, const Vector3& dir)
-	{
-		if (!s_rec.apply_cosine)
-			return 1.0;
-		return std::max(dot(s_rec.cosine_normal, normalize(dir)), 0.0);
-	}
-
-	Color miss_radiance(const Ray& ray) const
-	{
-		// If an HDR environment is set, it becomes both background and light source.
-		if (environment)
-			return environment->radiance(ray.direction());
-		return background;
-	}
-
-	// Light-selection mixture (geometry lights + environment) at a shading point.
-	// Returns nullptr when no light strategy can contribute; NEE is then skipped and the BSDF
-	// sample alone carries direct lighting with MIS weight 1.
-	std::shared_ptr<PDF> build_light_pdf(const Point3& origin, const Scattered_Record& s_rec) const
-	{
-		const Vector3* normal = s_rec.apply_cosine ? &s_rec.cosine_normal : nullptr;
-		auto p_light = std::make_shared<Light_Mixture_PDF>(light_sampler, origin, normal);
-		if (!p_light->available())
-			return nullptr;
-		return p_light;
-	}
-
-	// Suppress immediate emission / environment when the caller already handles direct lighting explicitly.
-	Color ray_color(const Ray& ray, const int depth, const Hittable& world, bool allow_emission)
-	{
-		if (depth <= 0)
-			return Color(0, 0, 0);
-
-		HitRecord rec;
-		// This simple path tracer version has no explicit light sampling, so misses can see the background.
-		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
-
-		Scattered_Record s_rec{};
-		s_rec.cosine_normal = rec.n;
-		const Color emitted_color =
-			allow_emission ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p)
-			: Color(0, 0, 0);
-
-		if (!rec.mat->Scatter(ray, rec, s_rec))
-			return emitted_color;
-
-		if (s_rec.skip_pdf)
-		{
-			// Specular and dielectric events already provide the next ray, so there is no PDF division here.
-			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, true);
-		}
-
-		Ray scattered(rec.p, s_rec.p_pdf->generate(), ray.time());
-		const double pdf_value = s_rec.p_pdf->value(scattered.direction());
-		if (pdf_value <= 0.0)
-			return emitted_color;
-
-		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
-		const Color sample_color = ray_color(scattered, depth - 1, world, true);
-		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / pdf_value;
-
-		return emitted_color + scattered_color;
-	}
-
-	// Ver.2
-	// Suppress immediate emission / environment when the caller already handles direct lighting explicitly.
-	Color ray_color(const Ray& ray, const int depth, const Hittable& world, const Hittable& lights, bool allow_emission)
-	{
-		if (depth <= 0)
-			return Color(0, 0, 0);
-
-		HitRecord rec;
-		// 0.001 is a small epsilon to prevent shadow acne
-		// when cannot hit anything, return environment radiance if allowed, 
-		// otherwise return black
-		if (!world.Hit(ray, Interval(0.001, infinity), rec))
-			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
-
-		Scattered_Record s_rec{};
-		s_rec.cosine_normal = rec.n;
-		// When hit a surface,
-		// we need to consider whether the surface emits light by itself or not, 
-		// and whether the ray should be scattered further or not
-		const Color emitted_color =
-			allow_emission ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p)
-			: Color(0, 0, 0);
-
-		// If cannot hit anything further, 
-		// return the emitted color only
-		if (!rec.mat->Scatter(ray, rec, s_rec))
-			return emitted_color;
-
-		// If the material is those materials whose reflected rays / refracted rays are not sampling from PDF,
-		// rather directly determined by the material itself,
-		// we can directly trace the ray without explicit direct-light sampling
-		if (s_rec.skip_pdf)
-		{
-			// Delta paths cannot use explicit direct-light sampling, so keep emission enabled.
-			return emitted_color + s_rec.attenuation * ray_color(s_rec.skip_pdf_ray, depth - 1, world, lights, true);
-		}
-
-		auto p_light = build_light_pdf(rec.p, s_rec);
-
-		const int bounce = max_depth - depth;
-		// Bounce zero is the camera-visible surface, where extra direct-light samples help most.
-		// More first-bounce light samples reduce direct-light noise where the image is most visible.
-		const int light_direct_sample_count = !p_light ? 0 : (bounce == 0) ? first_bounce_samples : 1;
-		const int bsdf_direct_sample_count = 1;
-
-		// Spend extra first-bounce budget on explicit light samples instead of duplicating full recursion.
-		Color light_direct_sum(0, 0, 0);
-		for (int i = 0; i < light_direct_sample_count; ++i)
-		{
-			light_direct_sum += sample_direct_light_once(
-				ray,
-				rec,
-				s_rec,
-				world,
-				p_light,
-				light_direct_sample_count,
-				bsdf_direct_sample_count);
-		}
-
-		// Keep one BSDF-side direct sample so sharp glossy lobes still have a matching strategy.
-		Color bsdf_direct_sum(0, 0, 0);
-		for (int i = 0; i < bsdf_direct_sample_count; ++i)
-		{
-			bsdf_direct_sum += sample_direct_bsdf_once(
-				ray,
-				rec,
-				s_rec,
-				world,
-				p_light,
-				light_direct_sample_count,
-				bsdf_direct_sample_count);
-		}
-
-		const Color direct_lighting =
-			(light_direct_sample_count > 0 ? light_direct_sum / static_cast<double>(light_direct_sample_count) : Color(0, 0, 0)) +
-			bsdf_direct_sum / static_cast<double>(bsdf_direct_sample_count);
-		// Direct lighting is estimated explicitly; recursion only carries indirect light forward.
-		const Color indirect_lighting =
-			sample_indirect_once(ray, depth, world, lights, rec, s_rec);
-
-		return emitted_color + direct_lighting + indirect_lighting;
-	}
-
-	// Evaluate one explicit light-side direct sample without spawning a recursive subtree.
-	Color sample_direct_light_once(
-		const Ray& ray,
-		const HitRecord& rec,
-		const Scattered_Record& s_rec,
-		const Hittable& world,
-		const std::shared_ptr<PDF>& p_light,
-		const int light_sample_count,
-		const int bsdf_sample_count)
-	{
-		Vector3 dir = p_light->generate();
-		Ray scattered(rec.p, dir, ray.time());
-
-		const double light_pdf = p_light->value(dir);
-		if (light_pdf <= 0.0)
-			return Color(0, 0, 0);
-
-		const double bsdf_pdf = s_rec.p_pdf->value(scattered.direction());
-		const double mis_weight =
-			power_heuristic(light_pdf, light_sample_count, bsdf_pdf, bsdf_sample_count);
-
-		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
-		if (cos_theta <= 0.0)
-			return Color(0, 0, 0);
-
-		const Color direct_radiance = trace_direct_radiance(scattered, world);
-
-		return (s_rec.attenuation * f * direct_radiance * cos_theta * mis_weight)
-			/ light_pdf;
-	}
-
-	// Evaluate one explicit BSDF-side direct sample so glossy reflections still have a matching estimator.
-	Color sample_direct_bsdf_once(
-		const Ray& ray,
-		const HitRecord& rec,
-		const Scattered_Record& s_rec,
-		const Hittable& world,
-		const std::shared_ptr<PDF>& p_light,
-		const int light_sample_count,
-		const int bsdf_sample_count)
-	{
-		Vector3 dir = s_rec.p_pdf->generate();
-		Ray scattered(rec.p, dir, ray.time());
-
-		const double bsdf_pdf = s_rec.p_pdf->value(dir);
-		if (bsdf_pdf <= 0.0)
-			return Color(0, 0, 0);
-
-		const double light_pdf = p_light ? p_light->value(scattered.direction()) : 0.0;
-		const double mis_weight =
-			power_heuristic(bsdf_pdf, bsdf_sample_count, light_pdf, light_sample_count);
-
-		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
-		if (cos_theta <= 0.0)
-			return Color(0, 0, 0);
-
-		const Color direct_radiance = trace_direct_radiance(scattered, world);
-
-		return (s_rec.attenuation * f * direct_radiance * cos_theta * mis_weight)
-			/ bsdf_pdf;
-	}
-
-	// Continue the path only once through the BSDF after the explicit direct-light estimate.
-	Color sample_indirect_once(
-		const Ray& ray,
-		const int depth,
-		const Hittable& world,
-		const Hittable& lights,
-		const HitRecord& rec,
-		const Scattered_Record& s_rec)
-	{
-		Vector3 dir = s_rec.p_pdf->generate();
-		Ray scattered(rec.p, dir, ray.time());
-
-		const double pdf_value = s_rec.p_pdf->value(dir);
-		if (pdf_value <= 0.0)
-			return Color(0, 0, 0);
-
-		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
-		if (cos_theta <= 0.0)
-			return Color(0, 0, 0);
-
-		double p_survival = 1.0;
-		const int bounce = max_depth - depth;
-		if (bounce >= 3)
-		{
-			// Russian roulette ends low-energy paths after a few bounces without biasing the result.
-			const Color rr_weight = (s_rec.attenuation * f * cos_theta) / pdf_value;
-
-			p_survival = std::clamp(
-				std::fmax(rr_weight.x(), std::fmax(rr_weight.y(), rr_weight.z())),
-				0.0001,
-				0.9999);
-
-			if (random_double() > p_survival)
-				return Color(0, 0, 0);
-		}
-
-		// The next call should not add immediate emission again because direct lighting
-		// has already been estimated explicitly at this bounce.
-		const Color indirect_radiance = ray_color(scattered, depth - 1, world, lights, false);
-
-		return (s_rec.attenuation * f * indirect_radiance * cos_theta)
-			/ (pdf_value * p_survival);
-	}
-
-	// Trace a single visibility ray to either an emissive surface or the environment.
-	Color trace_direct_radiance(const Ray& shadow_ray, const Hittable& world) const
-	{
-		HitRecord light_rec;
-		// Missing scene geometry means the shadow ray reached the HDR environment, if one exists.
-		if (!world.Hit(shadow_ray, Interval(0.001, infinity), light_rec))
-			return miss_radiance(shadow_ray);
-
-		return light_rec.mat->emitted(
-			shadow_ray,
-			light_rec,
-			light_rec.u,
-			light_rec.v,
-			light_rec.p);
-	}
-
 	Ray get_center_ray(int i, int j) const
 	{
 		auto pixel_sample =
@@ -793,6 +498,7 @@ private :
 
 		return Ray(ray_origin, ray_direction, 0.0);
 	}
+
 	PixelGuide trace_pixel_data(const Ray& ray, const Hittable& world) const
 	{
 		PixelGuide data;
