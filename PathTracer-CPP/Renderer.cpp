@@ -14,9 +14,16 @@
 #include "Triangle.h"
 #include "ObjLoader.h"
 
+#include <charconv>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string_view>
+
 namespace
 {
 	constexpr bool kKeepPreviewOpenAfterRender = false;
+	bool quick_render = false;
 }
 
 void Bouncing_Spheres();
@@ -38,9 +45,96 @@ void PBR_Benchmark();
 void PBR_Normal_Map_Test();
 void PBR_IBL_Test();
 void README_Showcase();
+std::pair<Hittable_List, Hittable_List> BuildPBRValidationScene();
+Camera MakePBRValidationCamera();
+
+namespace
+{
+    void FindAssetDirectory()
+    {
+        wchar_t executable[MAX_PATH] = {};
+        const DWORD length = GetModuleFileNameW(nullptr, executable, MAX_PATH);
+        std::vector<std::filesystem::path> starts = { std::filesystem::current_path() };
+        if (length > 0 && length < MAX_PATH)
+            starts.push_back(std::filesystem::path(executable).parent_path());
+
+        for (auto directory : starts)
+        {
+            while (!directory.empty())
+            {
+                for (const auto& candidate : { directory, directory / "PathTracer-CPP" })
+                {
+                    if (std::filesystem::is_directory(candidate / "images") &&
+                        std::filesystem::is_directory(candidate / "Model"))
+                    {
+                        std::filesystem::current_path(candidate);
+                        return;
+                    }
+                }
+                const auto parent = directory.parent_path();
+                if (parent == directory) break;
+                directory = parent;
+            }
+        }
+        std::clog << "Asset directory not found; using the current directory and RTW_IMAGES.\n";
+    }
+
+    int SmokeRender()
+    {
+        const char* output_files[] = {
+            "smoke_serial.ppm", "smoke_serial_raw.ppm",
+            "smoke_parallel.ppm", "smoke_parallel_raw.ppm"
+        };
+        // Clear old results first so failed rendering cannot pass with stale files.
+        for (const auto* filename : output_files)
+        {
+            std::ofstream output(filename, std::ios::trunc);
+            if (!output) throw std::runtime_error(std::string("Cannot write smoke output: ") + filename);
+        }
+        auto [world, lights] = BuildPBRValidationScene();
+        Camera cam = MakePBRValidationCamera();
+        cam.image_width = 64;
+        cam.sample_per_pixel = 4;
+        cam.max_depth = 4;
+        cam.progressive_output_mode = Camera::Progressive_Output_Mode::Denoised_With_Raw;
+        cam.output_filename = "smoke_serial.ppm";
+        cam.render_mode = Camera::Render_Mode::Serial;
+        cam.RenderProgressive(world, lights);
+        cam.output_filename = "smoke_parallel.ppm";
+        cam.render_mode = Camera::Render_Mode::Parallel;
+        cam.RenderProgressive(world, lights);
+        for (const auto* filename : output_files)
+        {
+            std::ifstream output(filename);
+            std::string magic;
+            int width = 0, height = 0, max_value = 0;
+            if (!(output >> magic >> width >> height >> max_value) ||
+                magic != "P3" || width != 64 || height != 36 || max_value != 255)
+                throw std::runtime_error(std::string("Invalid smoke output: ") + filename);
+            for (int i = 0; i < width * height * 3; ++i)
+            {
+                int channel = 0;
+                if (!(output >> channel) || channel < 0 || channel > max_value)
+                    throw std::runtime_error(std::string("Incomplete smoke output: ") + filename);
+            }
+            output >> std::ws;
+            if (!output.eof()) throw std::runtime_error(std::string("Unexpected smoke output data: ") + filename);
+        }
+        std::clog << "Smoke render finished (64x36, 4 spp, depth 4, serial and parallel).\n";
+        return 0;
+    }
+}
 
 void RenderAndPreview(Camera& cam, const Hittable& world)
 {
+	if (quick_render)
+	{
+		cam.image_width = 64;
+		cam.sample_per_pixel = 4;
+		cam.max_depth = 4;
+		cam.RenderProgressive(world);
+		return;
+	}
 	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
 	Timer timer;
 	cam.RenderProgressive(world, &preview);
@@ -51,6 +145,14 @@ void RenderAndPreview(Camera& cam, const Hittable& world)
 }
 void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights)
 {
+	if (quick_render)
+	{
+		cam.image_width = 64;
+		cam.sample_per_pixel = 4;
+		cam.max_depth = 4;
+		cam.RenderProgressive(world, lights);
+		return;
+	}
 	PPMPreviewWindow preview(cam.output_filename, cam.image_width, cam.output_height());
 	Timer timer;
 	cam.RenderProgressive(world, lights, &preview);
@@ -60,9 +162,50 @@ void RenderAndPreview(Camera& cam, const Hittable& world, const Hittable& lights
 		preview.WaitUntilClosed();
 }
 
-int main()
+int main(int argc, char** argv)
 {
-	switch (19)
+    int scene = 19;
+    bool explicit_assets = false;
+    bool smoke = false;
+    try
+    {
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string_view argument(argv[i]);
+            if (argument == "--help")
+            {
+                std::cout << "PathTracer [--scene 1..19] [--assets directory] [--quick]\n"
+                             "PathTracer --smoke  (asset-free serial/parallel PBR render)\n";
+                return 0;
+            }
+            if (argument == "--smoke")
+            {
+                smoke = true;
+                continue;
+            }
+            if (argument == "--quick")
+            {
+                quick_render = true;
+                continue;
+            }
+            if (argument == "--assets" && i + 1 < argc)
+            {
+                std::filesystem::current_path(argv[++i]);
+                explicit_assets = true;
+            }
+            else if (argument == "--scene" && i + 1 < argc)
+            {
+                const std::string_view value(argv[++i]);
+                const auto result = std::from_chars(value.data(), value.data() + value.size(), scene);
+                if (result.ec != std::errc{} || result.ptr != value.data() + value.size() || scene < 1 || scene > 19)
+                    throw std::runtime_error("--scene must be an integer from 1 to 19.");
+            }
+            else
+                throw std::runtime_error("Unknown or incomplete option. Use --help.");
+        }
+        if (smoke) return SmokeRender();
+        if (!explicit_assets) FindAssetDirectory();
+	switch (scene)
 	{
 		case  1:  Bouncing_Spheres();					    break;
 		case  2:  Checker_Spheres();					    break;
@@ -84,6 +227,13 @@ int main()
 		case 18:  PBR_IBL_Test();                           break;
 		case 19:  README_Showcase();                        break;
 	}
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "PathTracer: " << error.what() << '\n';
+        return 1;
+    }
+    return 0;
 }
 
 std::pair<Hittable_List, Hittable_List> BuildPBRValidationScene()
