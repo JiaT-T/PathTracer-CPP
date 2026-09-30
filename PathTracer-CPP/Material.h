@@ -13,6 +13,12 @@ public :
 	// Delta materials like mirror/glass skip normal PDF sampling and provide a final ray directly.
 	bool skip_pdf = false;
 	Ray skip_pdf_ray;
+	// Normal used by the integrator for the |cos(theta)| term. It must be the same normal the
+	// material uses in Eval()/PDF (e.g. the normal-mapped shading normal). The integrator
+	// initializes it to rec.n before Scatter().
+	Vector3 cosine_normal;
+	// Phase functions (participating media) have no cosine foreshortening term.
+	bool apply_cosine = true;
 };
 
 
@@ -201,6 +207,8 @@ public :
 		s_rec.attenuation = Color(1.0, 1.0, 1.0);
 		s_rec.p_pdf = std::make_shared<Sphere_PDF>();
 		s_rec.skip_pdf = false;
+		// rec.n of a medium hit is arbitrary; the phase function integral has no cosine.
+		s_rec.apply_cosine = false;
 		return true;
 	}
 
@@ -260,6 +268,8 @@ public :
 
 		s_rec.p_pdf = std::make_shared<Mixture_PDF>(diffuse_pdf, specular_pdf, diffuse_weight);
 		s_rec.skip_pdf = false;
+		// Eval()/PDF use the (normal-mapped, view-corrected) shading normal, so the cosine must too.
+		s_rec.cosine_normal = n;
 		return true;
 	}
 
@@ -269,8 +279,10 @@ public :
 		const Vector3 v = normalize(-ray_in.direction());
 		const Vector3 l = normalize(scattered.direction());
 		const Vector3 n = corrected_shading_normal(rec, v);
-		const double g_dot_l = std::max(dot(rec.n, l), 0.0);
-		const double g_dot_v = std::max(dot(rec.n, v), 0.0);
+		// Sidedness uses the geometric normal (light leaks); shading uses n. Using the interpolated
+		// normal here blackens smooth-mesh silhouettes where rec.n . v < 0 < geo_n . v.
+		const double g_dot_l = std::max(dot(rec.geo_n, l), 0.0);
+		const double g_dot_v = std::max(dot(rec.geo_n, v), 0.0);
 		if (g_dot_l <= 0.0 || g_dot_v <= 0.0)
 			return Color(0, 0, 0);
 		const double n_dot_l = std::max(dot(n, l), 1e-4);
@@ -353,7 +365,8 @@ public :
 
 	Color Albedo(double u, double v, const Point3& p) const override
 	{
-		return base_tex->value(u, v, p);
+		// base_tex may be null (e.g. OBJ material with PBR maps but Kd = 0); match sample_color().
+		return base_tex ? base_tex->value(u, v, p) : Color(1.0, 1.0, 1.0);
 	}
 
 private:

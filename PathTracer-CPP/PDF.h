@@ -20,7 +20,7 @@ public :
 
 	double value(const Vector3& dir) const override
 	{
-		return 1.0 / (1.0 * pi);
+		return 1.0 / (4.0 * pi);
 	}
 	Vector3 generate() const override
 	{
@@ -101,7 +101,8 @@ public:
 	GGX_PDF(const Vector3& normal, const Vector3& view_dir, double roughness)
 		: uvw(normal), view_dir(normalize(view_dir)), roughness(std::clamp(roughness, 0.05, 1.0)) 
 	{
-		alpha = roughness * roughness;
+		// Use the clamped member, not the constructor parameter that shadows it.
+		alpha = this->roughness * this->roughness;
 	}
 
 	// Specular PDF used by PBR_Material. VNDF samples visible microfacets from the view direction.
@@ -135,10 +136,10 @@ public:
 		const Vector3 v_local = to_local(view_dir);
 		const Vector3 h_local = sample_visible_half_vector_local(v_local);
 		const Vector3 h = normalize(uvw.transform(h_local));
-		const Vector3 l = reflect(-view_dir, h);
-		if (dot(l, uvw.w()) <= 0.0)
-			return uvw.w();
-		return l;
+		// A below-horizon reflection is an invalid sample. Return it as-is so value() yields 0
+		// and the integrator discards it. Replacing it with the normal would put a point mass
+		// at +N that value() does not account for (energy gain on rough / grazing surfaces).
+		return reflect(-view_dir, h);
 	}
 
 private:

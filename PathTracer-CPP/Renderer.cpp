@@ -127,10 +127,12 @@ std::pair<Hittable_List, Hittable_List> BuildPBRValidationScene()
 		0.5,
 		make_pbr(Color(0.95, 0.65, 0.2), 0.75, 1.0)));
 
+	// Diffuse_Light is one-sided (front face = cross(u, v)). u/v are ordered so the light
+	// faces down toward the spheres; the previous order emitted upward into the void.
 	auto quad_light = std::make_shared<Quad>(
 		Point3(-2.0, 5.5, 2.0),
-		Vector3(4.0, 0.0, 0.0),
 		Vector3(0.0, 0.0, -4.0),
+		Vector3(4.0, 0.0, 0.0),
 		light_mat);
 	world.add(quad_light);
 	lights.add(quad_light);
@@ -919,18 +921,20 @@ void PBR_Normal_Map_Test()
 			std::make_shared<Solid_Color>(0.75, 0.75, 0.75),
 			std::make_shared<Solid_Color>(0.0, 0.0, 0.0))));
 
+	// Both lights are one-sided; u/v order makes cross(u, v) face the panels
+	// (key light faces -Y, fill light faces +X).
 	auto quad_light = std::make_shared<Quad>(
 		Point3(-2.8, 4.8, 3.2),
-		Vector3(5.6, 0.0, 0.0),
 		Vector3(0.0, 0.0, -6.2),
+		Vector3(5.6, 0.0, 0.0),
 		light_mat);
 	world.add(quad_light);
 	lights.add(quad_light);
 
 	auto fill_light = std::make_shared<Quad>(
 		Point3(-5.4, 0.8, 3.6),
-		Vector3(0.0, 3.0, 0.0),
 		Vector3(0.0, 0.0, -4.8),
+		Vector3(0.0, 3.0, 0.0),
 		fill_light_mat);
 	world.add(fill_light);
 	lights.add(fill_light);

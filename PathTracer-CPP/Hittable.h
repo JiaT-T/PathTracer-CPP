@@ -25,6 +25,11 @@ public :
 	{
 		front_face = dot(ray.direction(), outward_normal) < 0;
 		n = front_face ? outward_normal : -outward_normal;
+		// Analytic primitives (Sphere / Quad) have no separate shading normal. Without this,
+		// geo_n keeps its default (0,1,0) or a stale value from another primitive in the same
+		// traversal, which breaks the denoiser normal guide and PBR sidedness checks.
+		geo_n = n;
+		has_tangent_space = false;
 	}
 };
 
@@ -222,8 +227,10 @@ public:
 
 		if (rec.has_tangent_space)
 		{
-			rec.tangent *= inv_scale;
-			rec.bitangent *= inv_scale;
+			// Tangents are surface directions: they transform with M (scale), while normals
+			// transform with M^-T (inv_scale). Only differs from the old code for non-uniform scale.
+			rec.tangent *= scale;
+			rec.bitangent *= scale;
 			rec.tangent = normalize(rec.tangent);
 			rec.bitangent = normalize(rec.bitangent);
 		}

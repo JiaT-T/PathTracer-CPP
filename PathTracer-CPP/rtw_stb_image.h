@@ -62,7 +62,11 @@ public:
 
     bool load(const std::string& filename) {
         int n = bytes_per_pixel; 
-        
+
+        // stbi_loadf() applies pow(x, 2.2) to LDR files by default. Keep the raw encoded
+        // values instead: Image_Texture / Environment decide sRGB vs linear explicitly,
+        // otherwise sRGB maps get decoded twice and data maps (normal/roughness) get decoded once.
+        stbi_ldr_to_hdr_gamma(1.0f);
         float* raw_fdata = stbi_loadf(filename.c_str(), &image_width, &image_height, &n, bytes_per_pixel);
         if (raw_fdata == nullptr) return false;
 

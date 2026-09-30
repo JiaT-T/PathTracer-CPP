@@ -632,7 +632,7 @@ private :
 							((i + offset.x()) * pixel_delta_u) +
 							((j + offset.y()) * pixel_delta_v);
 
-		auto ray_origin = (defocus_angle < 0) ? camera_center : defocus_disk_sample();
+		auto ray_origin = (defocus_angle <= 0) ? camera_center : defocus_disk_sample();
 		auto ray_direction = pixel_sample - ray_origin;
 		auto ray_time = random_double();
 
@@ -659,6 +659,15 @@ private :
 	}
 
 	int first_bounce_samples = 4;
+
+	// Foreshortening term of the rendering equation. Uses the same normal as the material's
+	// Eval()/PDF, and is 1 for phase functions (volumes have no meaningful surface normal).
+	static double scatter_cosine(const Scattered_Record& s_rec, const Vector3& dir)
+	{
+		if (!s_rec.apply_cosine)
+			return 1.0;
+		return std::max(dot(s_rec.cosine_normal, normalize(dir)), 0.0);
+	}
 
 	Color miss_radiance(const Ray& ray) const
 	{
@@ -704,6 +713,7 @@ private :
 			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
 
 		Scattered_Record s_rec{};
+		s_rec.cosine_normal = rec.n;
 		const Color emitted_color =
 			allow_emission ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p)
 			: Color(0, 0, 0);
@@ -723,7 +733,7 @@ private :
 			return emitted_color;
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
 		const Color sample_color = ray_color(scattered, depth - 1, world, true);
 		const Color scattered_color = (s_rec.attenuation * f * sample_color * cos_theta) / pdf_value;
 
@@ -745,6 +755,7 @@ private :
 			return allow_emission ? miss_radiance(ray) : Color(0, 0, 0);
 
 		Scattered_Record s_rec{};
+		s_rec.cosine_normal = rec.n;
 		// When hit a surface,
 		// we need to consider whether the surface emits light by itself or not, 
 		// and whether the ray should be scattered further or not
@@ -834,7 +845,7 @@ private :
 			power_heuristic(light_pdf, light_sample_count, bsdf_pdf, bsdf_sample_count);
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
 		if (cos_theta <= 0.0)
 			return Color(0, 0, 0);
 
@@ -866,7 +877,7 @@ private :
 			power_heuristic(bsdf_pdf, bsdf_sample_count, light_pdf, light_sample_count);
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
 		if (cos_theta <= 0.0)
 			return Color(0, 0, 0);
 
@@ -893,7 +904,7 @@ private :
 			return Color(0, 0, 0);
 
 		const Color f = rec.mat->Eval(ray, rec, scattered);
-		const double cos_theta = std::max(dot(rec.n, normalize(scattered.direction())), 0.0);
+		const double cos_theta = scatter_cosine(s_rec, scattered.direction());
 		if (cos_theta <= 0.0)
 			return Color(0, 0, 0);
 
