@@ -1,6 +1,8 @@
 #pragma once
 #include "ONB.h"
 #include "Hittable.h"
+#include "Material.h"
+
 class Sphere : public Hittable
 {
 public :
@@ -26,6 +28,7 @@ public :
 
 	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
+		PT_COUNT_PRIMITIVE();
 		Point3 curr_center = center.at(ray.time());
 		Vector3 oc = curr_center - ray.origin();
 		auto a = ray.direction().length_squared();
@@ -52,28 +55,63 @@ public :
 		rec.p = ray.at(rec.t);
 		Vector3 outward_normal = (rec.p - curr_center) / radius;
 		rec.set_face_front(ray, outward_normal);
-		rec.mat = mat;
+		rec.mat = mat.get();
 		get_sphere_uv(outward_normal, rec.u, rec.v);
+		set_tangent_frame(outward_normal, rec);
 
 		return true;
 	}
 
 	AABB bounding_box() const override { return bbox; }
 
-	void get_sphere_uv(const Point3& p, double& u, double& v) const
+	// p is a point on the unit sphere. u = phi / 2pi, v = theta / pi with
+	// theta = acos(-y), phi = atan2(-z, x) + pi, i.e.
+	//   p(u, v) = (-sin(theta) cos(phi), -cos(theta), sin(theta) sin(phi)).
+	static void get_sphere_uv(const Point3& p, double& u, double& v)
 	{
-		auto theta = std::acos(-p.y());
+		auto theta = std::acos(std::clamp(-p.y(), -1.0, 1.0));
 		auto phi = std::atan2(-p.z(), p.x()) + pi;
 		u = phi / (2.0 * pi);
 		v = theta / pi;
 	}
 
+	// Tangent frame of the (u, v) parameterization above, needed by tangent-space normal maps:
+	//   T = normalize(dp/du) = (z, 0, -x) / rho                        (increasing u)
+	//   B = normalize(dp/dv) = (-cos(theta) cos(phi), sin(theta), cos(theta) sin(phi))
+	//                        = (-x y, rho^2, -z y) / rho                (increasing v)
+	// with rho = sqrt(x^2 + z^2) = sin(theta), cos(theta) = -y, cos(phi) = -x / rho,
+	// sin(phi) = z / rho. cross(T, B) = N_outward, so (T, B, N) is right-handed, matching the
+	// triangle convention (T along +u, B along +v, OpenGL normal maps). T is continuous across
+	// the u = 0 / 1 seam; at the two poles dp/du vanishes and an arbitrary tangent orthogonal
+	// to N is used (measure-zero set).
+	static void set_tangent_frame(const Vector3& n, HitRecord& rec)
+	{
+		const double rho2 = n.x() * n.x() + n.z() * n.z();
+		if (rho2 > 1e-12)
+		{
+			const double inv_rho = 1.0 / std::sqrt(rho2);
+			rec.tangent = Vector3(n.z() * inv_rho, 0.0, -n.x() * inv_rho);
+			rec.bitangent = Vector3(-n.x() * n.y() * inv_rho, rho2 * inv_rho, -n.z() * n.y() * inv_rho);
+		}
+		else
+		{
+			rec.tangent = Vector3(1.0, 0.0, 0.0);
+			rec.bitangent = cross(n, rec.tangent);
+		}
+		rec.has_tangent_space = true;
+	}
+
 	double pdf_value(const Point3& origin, const Vector3& direction) const override
 	{
+		// The cone sampling below is undefined for an origin inside the sphere (sqrt of a
+		// negative number); such points cannot see the emitting outer surface anyway.
+		auto squared_distanced = (center.at(0) - origin).length_squared();
+		if (squared_distanced <= radius * radius)
+			return 0.0;
+
 		HitRecord rec;
 		if (!this->Hit(Ray(origin, direction), Interval(0.001, infinity), rec)) return 0;
 
-		auto squared_distanced = (center.at(0) - origin).length_squared();
 		auto max_cosine_theta = std::sqrt(1 - radius * radius / squared_distanced);
 		auto solid_angle = 2.0 * pi * (1.0 - max_cosine_theta);
 
@@ -84,9 +122,22 @@ public :
 	{
 		Vector3 dir = center.at(0) - origin;
 		double squared_distanced = dir.length_squared();
+		if (squared_distanced <= radius * radius)
+			return Vector3(0, 1, 0); // pdf_value() is 0 here, the sample is discarded
 		ONB uvw(dir);
 
 		return uvw.transform(random_to_sphere(radius, squared_distanced));
+	}
+
+	bool light_shape_info(LightShapeInfo& info) const override
+	{
+		info.shape = LightShapeInfo::Shape::Sphere;
+		info.center = center.at(0);
+		info.radius = radius;
+		info.area = 4.0 * pi * radius * radius;
+		info.normal = Vector3(0, 0, 0);
+		info.luminance = mat ? mat->EmissionLuminance(0.5, 0.5, info.center) : 0.0;
+		return true;
 	}
 
 private :

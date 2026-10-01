@@ -40,15 +40,17 @@ public :
 	static const Interval universe;
 };
 
-Interval operator+(const Interval& a, double b)
+// Header-defined functions / static members must be inline, otherwise a second .cpp that
+// includes this header (e.g. a unit-test TU) fails to link with duplicate symbols.
+inline Interval operator+(const Interval& a, double b)
 {
 	return Interval(a.min + b, a.max + b);
 }
 
-Interval operator+(double b, const Interval& a)
+inline Interval operator+(double b, const Interval& a)
 {
 	return a+ b;
 }
 
-const Interval Interval::universe = Interval(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
+inline const Interval Interval::universe = Interval(-std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity());
 

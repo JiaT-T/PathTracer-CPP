@@ -43,10 +43,11 @@ inline Color_Bytes to_color_bytes(const Color& color)
 	auto g = color.y();
 	auto b = color.z();
 
-	// Replace NaN components with zero.
-	if (std::isnan(r)) r = 0.0;
-	if (std::isnan(g)) g = 0.0;
-	if (std::isnan(b)) b = 0.0;
+	// Replace NaN / Inf components with zero. Inf would become NaN in Reinhard (inf/inf),
+	// survive Interval::Clamp, and make the float -> unsigned char cast undefined behavior.
+	if (!std::isfinite(r)) r = 0.0;
+	if (!std::isfinite(g)) g = 0.0;
+	if (!std::isfinite(b)) b = 0.0;
 	r = std::max(r, 0.0);
 	g = std::max(g, 0.0);
 	b = std::max(b, 0.0);

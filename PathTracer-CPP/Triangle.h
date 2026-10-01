@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include "Hittable.h"
+#include "Material.h"
 #include "Vector3.h"
 
 struct TexCoord2
@@ -97,6 +98,16 @@ public :
 		return squared_distance / (cosine * area);
 	}
 
+	bool light_shape_info(LightShapeInfo& info) const override
+	{
+		info.shape = LightShapeInfo::Shape::Planar;
+		info.center = (v0 + v1 + v2) / 3.0;
+		info.normal = face_normal; // Diffuse_Light emits on the front face (towards +face_normal)
+		info.area = area;
+		info.luminance = mat ? mat->EmissionLuminance(0.5, 0.5, info.center) : 0.0;
+		return true;
+	}
+
 	Vector3 random(const Point3& origin) const override
 	{
 		auto sqrted_r1 = std::sqrt(random_double(0, 1));
@@ -155,6 +166,7 @@ private :
 
 inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 {
+	PT_COUNT_PRIMITIVE();
 	const Vector3 edge1 = v1 - v0;
 	const Vector3 edge2 = v2 - v0;
 	const Vector3 h = cross(ray.direction(), edge2);
@@ -207,7 +219,7 @@ inline bool Triangle::Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const
 	rec.u = w * uv0.x + u * uv1.x + v * uv2.x;
 	rec.v = w * uv0.y + u * uv1.y + v * uv2.y;
 
-	rec.mat = mat;
+	rec.mat = mat.get();
 	rec.front_face = dot(ray.direction(), face_normal) < 0;
 	// Keep both normals: geo_n is for robust sidedness, n is for visible shading.
 	rec.geo_n = rec.front_face ? face_normal : -face_normal;

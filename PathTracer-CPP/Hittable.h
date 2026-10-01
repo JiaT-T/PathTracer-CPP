@@ -1,5 +1,6 @@
 #pragma once
 #include "AABB.h"
+#include "Stats.h"
 
 class Material;
 
@@ -16,7 +17,10 @@ public :
 	double t = 0.0;
 	bool front_face = false;
 	bool has_tangent_space = false;
-	std::shared_ptr<Material> mat;
+	// Non-owning: the scene owns its materials for the whole render. A shared_ptr here cost an
+	// atomic increment/decrement on every primitive hit, and all threads contended on the same
+	// control blocks (Audit P-2).
+	const Material* mat = nullptr;
 	double u = 0.0;
 	double v = 0.0;
 
@@ -25,7 +29,25 @@ public :
 	{
 		front_face = dot(ray.direction(), outward_normal) < 0;
 		n = front_face ? outward_normal : -outward_normal;
+		// Analytic primitives (Sphere / Quad) have no separate shading normal. Without this,
+		// geo_n keeps its default (0,1,0) or a stale value from another primitive in the same
+		// traversal, which breaks the denoiser normal guide and PBR sidedness checks.
+		geo_n = n;
+		has_tangent_space = false;
 	}
+};
+
+// Geometry summary of an emitter, used by LightSampler to estimate how much a light
+// contributes at a shading point (selection probability only; never used for radiance).
+struct LightShapeInfo
+{
+	enum class Shape { Planar, Sphere };
+	Shape shape = Shape::Planar;
+	Point3 center;
+	Vector3 normal;          // Planar: emitting side (front face) normal
+	double area = 0.0;
+	double radius = 0.0;     // Sphere
+	double luminance = 0.0;  // emitted luminance (0 = not an emitter)
 };
 
 class Hittable
@@ -34,11 +56,12 @@ public :
 	virtual ~Hittable() = default;
 	virtual bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const = 0;
 	virtual AABB bounding_box() const = 0;
+	// Solid-angle pdf of random(origin) for `direction`. Only primitives that implement
+	// light_shape_info() can be sampled as lights.
 	virtual double pdf_value(const Point3& origin, const Vector3& direction) const { return 0.0; }
 	virtual Vector3 random(const Point3& origin) const { return Vector3(1.0, 0.0, 0.0); } 
-	// Returns the estimated power of the light emitted from the hittable, 
-	// which is used for importance sampling of light sources
-	virtual double sampling_power_estimate() const { return 0.0; }
+	// Returns false if this object cannot be sampled as a light (e.g. transform wrappers).
+	virtual bool light_shape_info(LightShapeInfo& info) const { return false; }
 };
 
 class Translation : public Hittable
@@ -63,12 +86,6 @@ public :
 	}
 
 	AABB bounding_box() const override { return bbox; }
-
-	double sampling_power_estimate() const override
-	{
-		return object->sampling_power_estimate();
-	}
-
 
 private :
 	std::shared_ptr<Hittable> object;
@@ -167,12 +184,6 @@ public :
 
 	AABB bounding_box() const override { return bbox; }
 
-	double sampling_power_estimate() const override
-	{
-		return object->sampling_power_estimate();
-	}
-
-
 private :
 	std::shared_ptr<Hittable> object;
 	double sin_theta;
@@ -222,8 +233,10 @@ public:
 
 		if (rec.has_tangent_space)
 		{
-			rec.tangent *= inv_scale;
-			rec.bitangent *= inv_scale;
+			// Tangents are surface directions: they transform with M (scale), while normals
+			// transform with M^-T (inv_scale). Only differs from the old code for non-uniform scale.
+			rec.tangent *= scale;
+			rec.bitangent *= scale;
 			rec.tangent = normalize(rec.tangent);
 			rec.bitangent = normalize(rec.bitangent);
 		}
@@ -232,20 +245,6 @@ public:
 	}
 
 	AABB bounding_box() const override { return bbox; }
-
-	double sampling_power_estimate() const override
-	{
-		const double sx = std::abs(scale.x());
-		const double sy = std::abs(scale.y());
-		const double sz = std::abs(scale.z());
-
-		// A similar approach to the surface area scaling factor for a scaled sphere,
-		// which is proportional to the average of the products of the scale factors along each pair of axes.
-		const double area_scale = (sx * sy + sy * sz + sz * sx) / 3.0;
-
-		return object->sampling_power_estimate() * area_scale;
-	}
-
 
 private:
 	std::shared_ptr<Hittable> object;

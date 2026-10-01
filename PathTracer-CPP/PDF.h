@@ -1,113 +1,57 @@
 #pragma once
-#include<algorithm>
-#include<array>
+#include <algorithm>
 #include "ONB.h"
-#include "Hittable.h"
-#include "Environment.h"
+#include "Microfacet.h"
 
-class PDF
+// Direction sampling densities used by the BSDFs. They are small value types (no heap
+// allocation, no virtual dispatch): the BSDF of a path vertex holds them by value on the stack.
+// All densities are with respect to solid angle.
+
+// Uniform sphere (isotropic phase function).
+struct Sphere_PDF
 {
-public :
-	virtual ~PDF() {}
-	virtual double value(const Vector3& dir) const = 0;
-	virtual Vector3 generate() const = 0;
-};
-
-class Sphere_PDF : public PDF
-{
-public :
-	Sphere_PDF() {}
-
-	double value(const Vector3& dir) const override
+	double value(const Vector3&) const
 	{
-		return 1.0 / (1.0 * pi);
+		return 1.0 / (4.0 * pi);
 	}
-	Vector3 generate() const override
+	Vector3 generate() const
 	{
 		return random_unit_vector();
 	}
 };
 
-class Cosine_PDF : public PDF
+// Cosine-weighted hemisphere around w.
+struct Cosine_PDF
 {
-public :
-	Cosine_PDF(const Vector3& w) : uvw(w) {};
+	Cosine_PDF() = default;
+	explicit Cosine_PDF(const Vector3& w) : uvw(w) {}
 
-	double value(const Vector3& dir) const override
+	double value(const Vector3& dir) const
 	{
 		auto cosine_theta = dot(normalize(dir), uvw.w());
 		return std::fmax(0, cosine_theta / pi);
 	}
-	Vector3 generate() const override
+	Vector3 generate() const
 	{
 		return uvw.transform(random_cosine_dir());
 	}
 
-private :
 	ONB uvw;
 };
 
-class Hittable_PDF : public PDF
+// GGX visible-normal (VNDF) reflection sampling for a fixed outgoing direction.
+struct GGX_PDF
 {
-public :
-	Hittable_PDF(const Hittable& object, const Point3& origin) : object(object), origin(origin) {};
-
-	double value(const Vector3& dir) const override
-	{
-		return object.pdf_value(origin, dir);
-	}
-	Vector3 generate() const override
-	{
-		return object.random(origin);
-	}
-
-private :
-	const Hittable& object;
-	Point3 origin;
-};
-
-class Mixture_PDF : public PDF
-{
-public :
-	Mixture_PDF(std::shared_ptr<PDF> p1, std::shared_ptr<PDF> p2)
-		: Mixture_PDF(p1, p2, 0.5) {}
-
-	Mixture_PDF(std::shared_ptr<PDF> p1, std::shared_ptr<PDF> p2, double weight0)
-	{
-		p[0] = p1;
-		p[1] = p2;
-		this->weight0 = std::clamp(weight0, 0.0, 1.0);
-	}
-
-	double value(const Vector3& dir) const override
-	{
-		// Probability of the mixed strategy must be the same weighted sum used by generate().
-		return weight0 * p[0]->value(dir) + (1.0 - weight0) * p[1]->value(dir);
-	}
-	Vector3 generate() const override
-	{
-		if (random_double() < weight0) return p[0]->generate();
-		else return p[1]->generate();
-	}
-
-private :
-	std::array<std::shared_ptr<PDF>, 2> p;
-	double weight0;
-};
-
-class GGX_PDF : public PDF
-{
-public:
+	GGX_PDF() = default;
 	GGX_PDF(const Vector3& normal, const Vector3& view_dir, double roughness)
-		: uvw(normal), view_dir(normalize(view_dir)), roughness(std::clamp(roughness, 0.05, 1.0)) 
+		: uvw(normal), view_dir(normalize(view_dir)), roughness(std::clamp(roughness, 0.05, 1.0))
 	{
-		alpha = roughness * roughness;
+		// Use the clamped member, not the constructor parameter that shadows it.
+		alpha = this->roughness * this->roughness;
 	}
 
-	// Specular PDF used by PBR_Material. VNDF samples visible microfacets from the view direction.
-	// GGX_NDF : pdf(l) = D(m) * cos_theta / (4 * dot(v, m))
-	// GGX_VNDF: pdf(h) = D(m) * G1(v) * dot(v, m) / dot(n, v), then pdf(l) = pdf(h) / (4 * dot(v, m))
-	double value(const Vector3& dir) const override
+	// pdf(l) = D_v(h) / (4 v.h) = G1(v) D(h) / (4 n.v), see ggx::pdf_vndf_reflection.
+	double value(const Vector3& dir) const
 	{
 		const Vector3 l = normalize(dir);
 		const double n_dot_l = dot(uvw.w(), l);
@@ -115,145 +59,27 @@ public:
 			return 0.0;
 
 		const Vector3 h = normalize(view_dir + l);
-		const double n_dot_h = std::max(dot(uvw.w(), h), 0.0);
+		const double n_dot_h = dot(uvw.w(), h);
 		const double n_dot_v = std::max(dot(uvw.w(), view_dir), 1e-6);
-		const double v_dot_h = std::max(dot(view_dir, h), 1e-6);
-		if (n_dot_h <= 0.0)
-			return 0.0;
-
-		const double D = GGX_D(n_dot_h);
-		const double smith_G1 = Smith_G(n_dot_v);
-
-		const double pdf_h = D * smith_G1 * v_dot_h / n_dot_v;
-
-		return pdf_h / (4.0 * v_dot_h);
+		return ggx::pdf_vndf_reflection(n_dot_v, n_dot_h, alpha);
 	}
 
-	Vector3 generate() const override
+	Vector3 generate() const
 	{
 		// Sample a visible half vector, then reflect the view vector around it.
-		const Vector3 v_local = to_local(view_dir);
-		const Vector3 h_local = sample_visible_half_vector_local(v_local);
-		const Vector3 h = normalize(uvw.transform(h_local));
-		const Vector3 l = reflect(-view_dir, h);
-		if (dot(l, uvw.w()) <= 0.0)
-			return uvw.w();
-		return l;
-	}
-
-private:
-	// NDF sampling method for GGX distribution
-	Vector3 sample_half_vector() const
-	{
+		const Vector3 v_local(dot(view_dir, uvw.u()), dot(view_dir, uvw.v()), dot(view_dir, uvw.w()));
 		const double u1 = random_double();
 		const double u2 = random_double();
-		const double alpha2 = alpha * alpha;
-		const double phi = 2.0 * pi * u1;
-		const double cos_theta = std::sqrt((1.0 - u2) / (1.0 + (alpha2 - 1.0) * u2));
-		const double sin_theta = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
-
-		const Vector3 local_half(
-			std::cos(phi) * sin_theta,
-			std::sin(phi) * sin_theta,
-			cos_theta);
-
-		return normalize(uvw.transform(local_half));
-	}
-
-	// VNDF sampling method for GGX distribution
-	Vector3 sample_visible_half_vector_local(const Vector3& v_local) const
-	{
-		// If the view direction is below the horizon, then there are no visible microfacets
-		if (v_local.z() <= 0)
-			return Vector3(0, 0, 1);
-
-		// Stretch view direction to roughness space
-		Vector3 vh = Vector3(
-			v_local.x() * alpha,
-			v_local.y() * alpha,
-			v_local.z());
-		vh = normalize(vh);
-
-		// Create a basis from the stretched view direction.
-		double lensq = vh.x() * vh.x() + vh.y() * vh.y();
-		Vector3 T1 = lensq > 0.0 
-			? Vector3(-vh.y(), vh.x(), 0) / std::sqrt(lensq)
-			: Vector3(1.0, 0.0, 0.0);
-		Vector3 T2 = cross(vh, T1);
-
-		// Sample a point with polar coordinates in the visible-normal domain.
-		double u1 = random_double();
-		double u2 = random_double();
-
-		double r = std::sqrt(u1);
-		double phi = 2.0 * pi * u2;
-
-		double t1 = r * std::cos(phi);
-		double t2 = r * std::sin(phi);
-
-		// Reproject on the hemisphere so glossy surfaces waste fewer samples on invisible normals.
-		double s = 0.5 * (1.0 + vh.z());
-		t2 = (1.0 - s) * std::sqrt(std::max(0.0, 1.0 - t1 * t1)) + s * t2;
-
-		double z = std::sqrt(std::max(0.0, 1.0 - t1 * t1 - t2 * t2));
-		Vector3 nh = t1 * T1 + t2 * T2 + z * vh;
-
-		Vector3 h = normalize(Vector3(alpha * nh.x(), alpha * nh.y(), std::max(0.0, nh.z())));
-
-		return h;
-	}
-
-	Vector3 to_local(const Vector3& v) const
-	{
-		return Vector3(
-			dot(v, uvw.u()),
-			dot(v, uvw.v()),
-			dot(v, uvw.w())
-		);
-	}
-
-	// D = alpha^2 / (pi * ((n_dot_h^2) * (alpha^2 - 1) + 1)^2)
-	double GGX_D(double n_dot_h) const
-	{
-		const double alpha2 = alpha * alpha;
-		const double denom = (n_dot_h * n_dot_h) * (alpha2 - 1.0) + 1.0;
-		const double D = alpha2 / (pi * denom * denom);
-		return D;
-	}
-
-	// G = G1(v) * G1(l)
-	// G1(x) = 2 / (1 + sqrt(1 + alpha^2 * tan^2(theta_x)))
-	double Smith_G(double n_dot_v) const
-	{
-		if(n_dot_v <= 0.0)
-			return 0.0;
-		const double alpha2 = alpha * alpha;
-		const double sin2 = std::max(0.0, 1.0 - n_dot_v * n_dot_v);
-		const double tan2 = sin2 / std::max(n_dot_v * n_dot_v, 1e-6);
-		return 2.0 / (1.0 + std::sqrt(1.0 + alpha2 * tan2));
+		const Vector3 h_local = ggx::sample_vndf_local(v_local, alpha, u1, u2);
+		const Vector3 h = normalize(uvw.transform(h_local));
+		// A below-horizon reflection is an invalid sample. Return it as-is so value() yields 0
+		// and the integrator discards it. Replacing it with the normal would put a point mass
+		// at +N that value() does not account for (energy gain on rough / grazing surfaces).
+		return reflect(-view_dir, h);
 	}
 
 	ONB uvw;
-	Vector3 view_dir;
-	double roughness;
-	double alpha;
-};
-
-class Environment_PDF : public PDF
-{
-public :
-	explicit Environment_PDF(const Environment& env) : env(env) {}
-
-	double value(const Vector3& dir) const override
-	{
-		return env.pdf_value(dir);
-	}
-
-	Vector3 generate() const override
-	{
-		return env.random();
-	}
-
-private :
-	const Environment& env;
+	Vector3 view_dir = Vector3(0, 0, 1);
+	double roughness = 1.0;
+	double alpha = 1.0;
 };

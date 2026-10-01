@@ -42,8 +42,10 @@ public :
 		rec.p = ray.at(rec.t);
 
 		rec.n = Vector3(1, 0, 0);  // arbitrary
+		rec.geo_n = rec.n;         // do not leak the boundary hit's normal
+		rec.has_tangent_space = false;
 		rec.front_face = true;     // also arbitrary
-		rec.mat = phase_function;
+		rec.mat = phase_function.get();
 
 		return true;
 	}
