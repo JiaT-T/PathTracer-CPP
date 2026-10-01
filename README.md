@@ -227,10 +227,13 @@ x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考�
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/build.ps1        # Release x64，使用 vswhere 查找 MSBuild
 # 或直接打开 PathTracer-CPP/PathTracer-CPP.slnx / .vcxproj
-# 或使用 CMake：
-cmake -S PathTracer-CPP -B build/cmake -G "Visual Studio 17 2022" -A x64
+# 或使用 CMake（仓库根目录；PathTracer-CPP/CMakeLists.txt 也会转发到根目录）：
+cmake -S . -B build/cmake -G "Visual Studio 17 2022" -A x64
 cmake --build build/cmake --config Release
+ctest --test-dir build/cmake -C Release --output-on-failure   # 运行 --test 与 --regress
 ```
+
+CMake 生成的可执行文件是 `build/cmake/Release/PathTracer.exe`，用法与下面的 `x64\Release\PathTracer-CPP.exe` 完全相同。
 
 ### 运行
 
@@ -285,3 +288,10 @@ x64\Release\PathTracer-CPP.exe --help
 - [`PATH_TRACER_IMPROVEMENT_AUDIT.md`](PATH_TRACER_IMPROVEMENT_AUDIT.md)：技术审查报告
 - [`PATH_TRACER_IMPLEMENTATION_REPORT.md`](PATH_TRACER_IMPLEMENTATION_REPORT.md)：本阶段的实现报告
 - [`ASSET_REVIEW.md`](ASSET_REVIEW.md)：纹理资产审查
+- [`ASSETS.md`](ASSETS.md)：第三方代码与资源的来源及待确认的许可
+
+## 参考与资源许可
+
+- 起点：[Ray Tracing in One Weekend](https://raytracing.github.io/) 教程系列。
+- OBJ 解析：[tinyobjloader](https://github.com/tinyobjloader/tinyobjloader)，许可证保留在 vendored header 中；图像加载：[stb](https://github.com/nothings/stb)，header 中保留了 MIT / public-domain 条款。
+- 仓库 LICENSE 不能替代第三方资源的原始许可，详见 [`ASSETS.md`](ASSETS.md)。
