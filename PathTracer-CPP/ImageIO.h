@@ -99,7 +99,8 @@ namespace image_io
 	}
 
 	// ASCII P3 PPM after tone mapping + sRGB OETF (display output).
-	inline bool write_ppm(const std::string& filename, const std::vector<Color>& pixels, int width, int height)
+	inline bool write_ppm(const std::string& filename, const std::vector<Color>& pixels, int width, int height,
+		const DisplaySettings& settings = {})
 	{
 		std::ofstream out(filename);
 		if (!out.is_open())
@@ -111,7 +112,7 @@ namespace image_io
 		out << "P3\n" << width << ' ' << height << "\n255\n";
 		for (int y = 0; y < height; ++y)
 			for (int x = 0; x < width; ++x)
-				write_color(out, pixels[static_cast<size_t>(y) * width + x]);
+				write_color(out, pixels[static_cast<size_t>(y) * width + x], settings);
 		return static_cast<bool>(out);
 	}
 

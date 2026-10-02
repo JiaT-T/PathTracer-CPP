@@ -199,13 +199,14 @@ public:
 	}
 
 	// Mixture density sum_i P_i p_i(dir) (solid angle).
-	double pdf(const Probabilities& probs, const Point3& p, const Vector3& dir) const
+	double pdf(const Probabilities& probs, const Point3& p, const Vector3& dir,
+		Environment::LookupCache* environment_cache = nullptr) const
 	{
 		if (!probs.any)
 			return 0.0;
 		double value = 0.0;
 		if (env && probs.env > 0.0)
-			value += probs.env * env->pdf_value(dir);
+			value += probs.env * (environment_cache ? env->pdf_value(dir, *environment_cache) : env->pdf_value(dir));
 		for (int i = 0; i < probs.count; ++i)
 		{
 			const double pi_ = geometry_probability(probs, i);

@@ -148,6 +148,7 @@
     <ClInclude Include="ImageIO.h" />
     <ClInclude Include="Integrator.h" />
     <ClInclude Include="RenderAOV.h" />
+    <ClInclude Include="RenderPreview.h" />
     <ClInclude Include="Stats.h" />
     <ClInclude Include="LightSampler.h" />
     <ClInclude Include="Microfacet.h" />

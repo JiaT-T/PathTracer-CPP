@@ -123,13 +123,14 @@ public:
 			const bool hit = world.Hit(ray, Interval(0.001, infinity), rec);
 
 			// Emission at this vertex, or environment / background on a miss.
-			const Color Le = hit ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p) : miss_radiance(ray);
+			Environment::LookupCache environment_cache;
+			const Color Le = hit ? rec.mat->emitted(ray, rec, rec.u, rec.v, rec.p) : miss_radiance(ray, environment_cache);
 			if (Le.x() > 0.0 || Le.y() > 0.0 || Le.z() > 0.0)
 			{
 				double w = 1.0;
 				if (!specular_bounce && prev_light_samples > 0)
 				{
-					const double light_pdf = lights.pdf(prev_probs, prev_point, ray.direction());
+					const double light_pdf = lights.pdf(prev_probs, prev_point, ray.direction(), &environment_cache);
 					w = power_heuristic(prev_bsdf_pdf, 1, light_pdf, prev_light_samples);
 				}
 				add(L, record, bounce, beta * Le * w);
@@ -211,7 +212,8 @@ public:
 					Vector3 wi;
 					if (!lights.sample(probs, rec.p, wi))
 						continue;
-					const double light_pdf = lights.pdf(probs, rec.p, wi);
+					Environment::LookupCache shadow_environment_cache;
+					const double light_pdf = lights.pdf(probs, rec.p, wi, &shadow_environment_cache);
 					if (!(light_pdf > 0.0))
 						continue;
 					const double cos_theta = bsdf.cosine(wi);
@@ -227,7 +229,7 @@ public:
 						record->light_pdf = light_pdf;
 						record->mis_weight = w;
 					}
-					const Color Ld = trace_emitted(Ray(rec.p, wi, ray.time()));
+					const Color Ld = trace_emitted(Ray(rec.p, wi, ray.time()), shadow_environment_cache);
 					add(L, record, bounce + 1, beta * f * Ld * (cos_theta * w / (light_pdf * light_samples)));
 				}
 
@@ -272,19 +274,19 @@ private:
 	Color background;
 	Settings settings;
 
-	Color miss_radiance(const Ray& ray) const
+	Color miss_radiance(const Ray& ray, Environment::LookupCache& cache) const
 	{
 		// If an HDR environment is set, it becomes both background and light source.
-		return environment ? environment->radiance(ray.direction()) : background;
+		return environment ? environment->radiance(ray.direction(), cache) : background;
 	}
 
 	// Radiance arriving along a shadow ray: emission of the closest hit, or the environment.
-	Color trace_emitted(const Ray& shadow_ray) const
+	Color trace_emitted(const Ray& shadow_ray, Environment::LookupCache& cache) const
 	{
 		thread_counters().shadow_rays++;
 		HitRecord light_rec;
 		if (!world.Hit(shadow_ray, Interval(0.001, infinity), light_rec))
-			return miss_radiance(shadow_ray);
+			return miss_radiance(shadow_ray, cache);
 		return light_rec.mat->emitted(shadow_ray, light_rec, light_rec.u, light_rec.v, light_rec.p);
 	}
 

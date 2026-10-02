@@ -12,7 +12,7 @@
 #include "Hittable_List.h"
 #include "My_Common.h"
 #include "Material.h"
-#include "PPMPreviewWindow.h"
+#include "RenderPreview.h"
 #include "Environment.h"
 #include "PostProcess.h"
 #include "ImageIO.h"
@@ -57,6 +57,10 @@ public :
 	// Debug AOVs written next to the output (<name>_<aov>.pfm / .ppm), see RenderAOV.h
 	std::vector<AOVKind> aovs;
 	AtrousDenoiser::Settings denoiser_settings;
+	DisplaySettings display_settings; // Presentation only; never affects accumulation / guides.
+	bool preview_denoise = true;
+	int preview_denoise_min_samples = 8;
+	double preview_denoise_interval_seconds = 0.75;
 
 	// Reproducibility / execution
 	uint64_t seed = 1;          // Global seed; every (pixel, sample) stream is derived from it
@@ -111,31 +115,33 @@ public :
 		std::vector<Color> out;
 		PostProcessInput input{ framebuffer, guide_buffer, image_width, image_height };
 		PostProcessOutput output{ out };
-		AtrousDenoiser(settings).Apply(input, output);
+		auto bounded_settings = settings;
+		bounded_settings.thread_count = resolved_thread_count();
+		AtrousDenoiser(bounded_settings).Apply(input, output);
 		return out;
 	}
 
 	// Ver.1: no explicit light list (pure BSDF sampling; emission found by chance).
-	void Render(const Hittable& world, PPMPreviewWindow* preview = nullptr)
+	void Render(const Hittable& world, RenderPreview* preview = nullptr)
 	{
 		light_sampler.build(nullptr, nullptr);
 		render_image(world, preview, false);
 	}
 
 	// Ver.2: next-event estimation towards `lights` (+ environment) with MIS.
-	void Render(const Hittable& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
+	void Render(const Hittable& world, const Hittable_List& lights, RenderPreview* preview = nullptr)
 	{
 		light_sampler.build(&lights, environment.get());
 		render_image(world, preview, false);
 	}
 
-	void RenderProgressive(const Hittable& world, PPMPreviewWindow* preview = nullptr)
+	void RenderProgressive(const Hittable& world, RenderPreview* preview = nullptr)
 	{
 		light_sampler.build(nullptr, nullptr);
 		render_image(world, preview, true);
 	}
 
-	void RenderProgressive(const Hittable& world, const Hittable_List& lights, PPMPreviewWindow* preview = nullptr)
+	void RenderProgressive(const Hittable& world, const Hittable_List& lights, RenderPreview* preview = nullptr)
 	{
 		light_sampler.build(&lights, environment.get());
 		render_image(world, preview, true);
@@ -184,7 +190,7 @@ private :
 	//
 	// progressive = true: several passes (preview refresh between passes), then the denoiser.
 	// progressive = false: one pass with all samples, no denoising.
-	void render_image(const Hittable& world, PPMPreviewWindow* preview, bool progressive)
+	void render_image(const Hittable& world, RenderPreview* preview, bool progressive)
 	{
 		initialize();
 		const PathIntegrator integrator = make_integrator(world);
@@ -209,7 +215,8 @@ private :
 		filtered_framebuffer.clear();
 		guide_buffer.assign(pixel_count, PixelGuide{});
 		aov_buffers.reset(pixel_count, aovs);
-		std::vector<unsigned char> preview_pixels;
+		const std::vector<Color> no_filtered_preview;
+		std::vector<Color> interim_filtered;
 		const std::vector<RenderTile> tiles = build_tiles();
 		const int total_samples = std::max(1, sample_per_pixel);
 		const int threads = resolved_thread_count();
@@ -218,10 +225,11 @@ private :
 		std::mutex counters_mutex;
 
 		auto preview_start_time = std::chrono::steady_clock::now();
-		if (preview)
+		auto last_preview_denoise = preview_start_time;
+		bool has_denoised_preview = false;
+		if (preview && !preview->IsClosed())
 		{
-			preview_pixels.assign(pixel_count * 4, 0);
-			preview->UpdateProgressiveImage(preview_pixels, 0, total_samples, 0.0);
+			preview->Update({ framebuffer, no_filtered_preview, 0, total_samples, 0.0, false });
 		}
 
 		// With a live preview, start with 1 sample per pass and grow the batch until a pass
@@ -293,9 +301,29 @@ private :
 
 			if (preview && !preview->IsClosed())
 			{
-				std::chrono::duration<double> elapsed_seconds = now - preview_start_time;
-				copy_framebuffer_to_preview(framebuffer, preview_pixels);
-				preview->UpdateProgressiveImage(preview_pixels, samples_done, total_samples, elapsed_seconds.count());
+				// Publish raw immediately; retain the last filtered snapshot until a new one is ready.
+				preview->Update({ framebuffer, no_filtered_preview, samples_done, total_samples,
+					std::chrono::duration<double>(now - preview_start_time).count(), false });
+				const double since_filter = std::chrono::duration<double>(now - last_preview_denoise).count();
+				if (progressive && preview_denoise && denoiser_settings.enabled && !preview->IsClosed() &&
+					samples_done < total_samples && samples_done >= std::max(1, preview_denoise_min_samples) &&
+					(!has_denoised_preview || since_filter >= std::max(0.0, preview_denoise_interval_seconds)))
+				{
+					// All tracing workers have joined: color and guide describe exactly the same samples.
+					// Filter at pass boundaries, sharing the render thread budget, with no concurrent writes.
+					resolve_guides();
+					auto settings = denoiser_settings;
+					settings.iterations = std::min(settings.iterations, 2);
+					settings.thread_count = threads;
+					PostProcessInput input{ framebuffer, guide_buffer, image_width, image_height };
+					PostProcessOutput output{ interim_filtered };
+					AtrousDenoiser(settings).Apply(input, output);
+					last_preview_denoise = std::chrono::steady_clock::now();
+					has_denoised_preview = true;
+					if (!preview->IsClosed())
+						preview->Update({ framebuffer, interim_filtered, samples_done, total_samples,
+							std::chrono::duration<double>(last_preview_denoise - preview_start_time).count(), false });
+				}
 			}
 
 			if (show_passes)
@@ -312,33 +340,36 @@ private :
 		if (verbose && last_non_finite_samples > 0)
 			std::clog << "\nWarning: dropped " << last_non_finite_samples << " non-finite samples.\n";
 
-		for (size_t i = 0; i < pixel_count; ++i)
-			guide_buffer[i] = aov_buffers.guide(i);
+		resolve_guides();
 
 		const bool needs_filtered_framebuffer =
-			writes_denoised_output || (progressive && preview && !preview->IsClosed());
+			writes_denoised_output || (progressive && preview_denoise && denoiser_settings.enabled && preview && !preview->IsClosed());
 		if (needs_filtered_framebuffer)
 		{
 			filtered_framebuffer.assign(pixel_count, Color(0, 0, 0));
 			PostProcessInput post_input{ framebuffer, guide_buffer, image_width, image_height };
 			PostProcessOutput post_output{ filtered_framebuffer };
-			const AtrousDenoiser denoiser(denoiser_settings);
+			auto settings = denoiser_settings;
+			settings.thread_count = threads;
+			const AtrousDenoiser denoiser(settings);
 			denoiser.Apply(post_input, post_output);
 		}
 
 		if (preview && !preview->IsClosed())
 		{
 			std::chrono::duration<double> elapsed_seconds = std::chrono::steady_clock::now() - preview_start_time;
-			copy_framebuffer_to_preview(needs_filtered_framebuffer ? filtered_framebuffer : framebuffer, preview_pixels);
-			preview->UpdateProgressiveImage(preview_pixels, total_samples, total_samples, elapsed_seconds.count());
+			preview->Update({ framebuffer, denoiser_settings.enabled ? filtered_framebuffer : no_filtered_preview,
+				total_samples, total_samples, elapsed_seconds.count(), true });
 		}
+		// Freeze the presentation settings used for this export; later window edits can use S.
+		const DisplaySettings output_display = preview ? preview->GetDisplaySettings() : display_settings;
 
 		if (write_outputs)
 		{
 			const std::vector<Color>& display = writes_denoised_output ? filtered_framebuffer : framebuffer;
 			if (writes_raw_sidecar)
-				image_io::write_ppm(raw_output_filename, framebuffer, image_width, image_height);
-			image_io::write_ppm(output_filename, display, image_width, image_height);
+				image_io::write_ppm(raw_output_filename, framebuffer, image_width, image_height, output_display);
+			image_io::write_ppm(output_filename, display, image_width, image_height, output_display);
 			if (write_linear_output)
 			{
 				// Linear, unfiltered estimate: the only output suitable for numerical comparison.
@@ -393,23 +424,10 @@ private :
 		return true;
 	}
 
-	void copy_framebuffer_to_preview(
-		const std::vector<Color>& source,
-		std::vector<unsigned char>& preview_pixels) const
+	void resolve_guides()
 	{
-		const size_t pixel_count = static_cast<size_t>(image_width) * image_height;
-		if (preview_pixels.size() != pixel_count * 4)
-			preview_pixels.assign(pixel_count * 4, 0);
-
-		for (size_t index = 0; index < pixel_count; ++index)
-		{
-			const Color_Bytes bytes = to_color_bytes(source[index]);
-			const size_t pixel_index = index * 4;
-			preview_pixels[pixel_index + 0] = bytes.b;
-			preview_pixels[pixel_index + 1] = bytes.g;
-			preview_pixels[pixel_index + 2] = bytes.r;
-			preview_pixels[pixel_index + 3] = 255;
-		}
+		for (size_t i = 0; i < guide_buffer.size(); ++i)
+			guide_buffer[i] = aov_buffers.guide(i);
 	}
 
 	int     image_height;       // Rendered image height

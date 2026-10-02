@@ -30,6 +30,9 @@ namespace
 		std::string output_mode;
 		std::vector<AOVKind> aovs;
 		std::string denoiser = "variance";
+		DisplaySettings display_settings;
+		bool preview_denoise = true;
+		double preview_denoise_interval_seconds = 0.75;
 		bool no_rr = false;
 		bool preview = true;
 		bool keep_preview_open = false;
@@ -53,9 +56,14 @@ namespace
 			"                          beauty albedo normal geo_normal depth roughness metallic emission\n"
 			"                          direct indirect samples bsdf_pdf light_pdf mis_weight path_length variance\n"
 			"  --denoiser <m>          variance (default) | legacy | off\n"
+			"  --exposure <EV>         Display exposure [-20,20] (default: 0); PFM stays linear\n"
+			"  --tonemap <m>           reinhard (default) | agx (compact approximation)\n"
+			"  --preview-denoise <m>   on (default) | off; intermediate denoising from 8 spp\n"
+			"  --preview-interval <s>  Minimum gap after a preview filter (default: 0.75 s)\n"
 			"  --no-rr                 Disable Russian roulette\n"
 			"  --no-preview            Do not open the Win32 preview window\n"
 			"  --keep-preview          Keep the preview window open after rendering\n"
+			"                          Keys: +/- EV, 0 reset EV, T tone map, D raw/denoised, S save preview\n"
 			"  --list                  List scenes\n"
 			"  --image-stats <file>    Per-channel statistics of an image's encoded values\n"
 			"\n"
@@ -141,6 +149,9 @@ namespace
 		if (!options.out.empty()) cam.output_filename = options.out;
 		cam.aovs = options.aovs;
 		cam.russian_roulette = !options.no_rr;
+		cam.display_settings = options.display_settings;
+		cam.preview_denoise = options.preview_denoise;
+		cam.preview_denoise_interval_seconds = options.preview_denoise_interval_seconds;
 		if (options.denoiser == "legacy") cam.denoiser_settings = AtrousDenoiser::Settings::legacy();
 		else if (options.denoiser == "off") cam.denoiser_settings.enabled = false;
 		if (options.output_mode == "raw") cam.progressive_output_mode = Camera::Progressive_Output_Mode::Raw;
@@ -167,7 +178,8 @@ namespace
 
 		std::unique_ptr<PPMPreviewWindow> preview;
 		if (options.preview)
-			preview = std::make_unique<PPMPreviewWindow>(cam.output_filename, cam.image_width, cam.output_height());
+			preview = std::make_unique<PPMPreviewWindow>(cam.output_filename, cam.image_width, cam.output_height(),
+				cam.display_settings, cam.preview_denoise && cam.denoiser_settings.enabled);
 
 		Timer timer;
 		if (scene.use_lights)
@@ -241,6 +253,41 @@ int main(int argc, char** argv)
 			}
 		}
 		else if (a == "--denoiser") options.denoiser = next("--denoiser");
+		else if (a == "--exposure" || a == "--preview-interval")
+		{
+			const std::string value = next(a.c_str());
+			try
+			{
+				size_t consumed = 0;
+				const double number = std::stod(value, &consumed);
+				const double minimum = a == "--exposure" ? -20.0 : 0.0;
+				const double maximum = a == "--exposure" ? 20.0 : 3600.0;
+				if (consumed != value.size() || !std::isfinite(number) || number < minimum || number > maximum)
+					throw std::out_of_range("display option");
+				if (a == "--exposure") options.display_settings.exposure_ev = number;
+				else options.preview_denoise_interval_seconds = number;
+			}
+			catch (const std::exception&)
+			{
+				std::cerr << "Invalid " << a << ": expected a finite number in "
+					<< (a == "--exposure" ? "[-20,20]" : "[0,3600]") << ".\n";
+				return 2;
+			}
+		}
+		else if (a == "--tonemap")
+		{
+			const std::string value = next("--tonemap");
+			if (value == "reinhard") options.display_settings.tone_mapping = ToneMapping::Reinhard;
+			else if (value == "agx") options.display_settings.tone_mapping = ToneMapping::AgX;
+			else { std::cerr << "Unknown tone map. Use reinhard or agx.\n"; return 2; }
+		}
+		else if (a == "--preview-denoise")
+		{
+			const std::string value = next("--preview-denoise");
+			if (value == "on") options.preview_denoise = true;
+			else if (value == "off") options.preview_denoise = false;
+			else { std::cerr << "Unknown preview denoise mode. Use on or off.\n"; return 2; }
+		}
 		else if (a == "--no-rr") options.no_rr = true;
 		else if (a == "--depth") { options.depth = std::stoi(next("--depth")); bench.depth = options.depth; }
 		else if (a == "--seed") { options.has_seed = true; options.seed = std::stoull(next("--seed")); bench.seed = options.seed; }

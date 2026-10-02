@@ -72,6 +72,7 @@ public:
 	{
 		bool enabled = true;
 		int iterations = 4;
+		int thread_count = 0; // 0 = hardware concurrency; Camera shares its render budget.
 		double normal_power = 128.0;
 		double depth_scale = 0.02;
 		// Variance-guided mode
@@ -111,7 +112,8 @@ public:
 			n == 0 ||
 			n != input.guide_buffer.size() ||
 			input.width <= 0 ||
-			input.height <= 0)
+			input.height <= 0 ||
+			n != static_cast<size_t>(input.width) * input.height)
 		{
 			output.color = input.color;
 			return;
@@ -174,7 +176,7 @@ private:
 		std::vector<double> var_prefiltered(var_in.size(), 0.0);
 		if (settings.variance_guided)
 		{
-			parallel::parallel_for(height, parallel::hardware_threads(), [&](int y, int)
+			parallel::parallel_for(height, parallel::resolve_thread_count(settings.thread_count), [&](int y, int)
 			{
 				for (int x = 0; x < width; ++x)
 				{
@@ -195,7 +197,7 @@ private:
 		}
 
 		// Rows are independent: parallel over rows (the previous filter was single-threaded).
-		parallel::parallel_for(height, parallel::hardware_threads(), [&](int y, int)
+		parallel::parallel_for(height, parallel::resolve_thread_count(settings.thread_count), [&](int y, int)
 		{
 			for (int x = 0; x < width; ++x)
 			{
