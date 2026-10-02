@@ -22,6 +22,9 @@
 #include "Environment.h"
 #include "Sphere.h"
 #include "Quad.h"
+#include "Triangle.h"
+#include "BVH.h"
+#include "Constant_Medium.h"
 #include "Texture.h"
 #include "ImageIO.h"
 #include "Scenes.h"
@@ -1071,6 +1074,299 @@ namespace
 		check(std::abs(samples[samples.size() / 2].x() - 16.0) < 1e-9, "sample count AOV = spp");
 	}
 
+	// Compare observable intersections, without depending on the BVH's split or leaf policy.
+	void check_bvh_intersections(const Hittable_List& objects, const std::vector<Ray>& rays,
+		Interval interval, const std::string& name)
+	{
+		const BVH_Node tree(objects);
+		int mismatches = 0, hits = 0;
+		std::string first_mismatch;
+		for (size_t i = 0; i < rays.size(); ++i)
+		{
+			HitRecord expected, actual;
+			const bool expected_hit = objects.Hit(rays[i], interval, expected);
+			const bool actual_hit = tree.Hit(rays[i], interval, actual);
+			hits += expected_hit ? 1 : 0;
+			bool same = expected_hit == actual_hit;
+			if (expected_hit && actual_hit)
+			{
+				const double tolerance = 1e-10 * std::max(1.0, std::abs(expected.t));
+				same = std::abs(expected.t - actual.t) <= tolerance && expected.mat == actual.mat &&
+					(expected.p - actual.p).length() <= 1e-9 &&
+					(expected.n - actual.n).length() <= 1e-9 &&
+					(expected.geo_n - actual.geo_n).length() <= 1e-9 &&
+					expected.front_face == actual.front_face &&
+					std::abs(expected.u - actual.u) <= 1e-9 && std::abs(expected.v - actual.v) <= 1e-9;
+			}
+			if (!same)
+			{
+				if (mismatches++ == 0)
+					first_mismatch = " first mismatch at ray " + std::to_string(i) +
+						" hit brute/BVH=" + std::to_string(expected_hit) + "/" + std::to_string(actual_hit) +
+						" t brute/BVH=" + fmt(expected.t, 10) + "/" + fmt(actual.t, 10);
+			}
+		}
+		check(mismatches == 0, name,
+			std::to_string(rays.size()) + " rays, " + std::to_string(hits) + " hits, " +
+			std::to_string(mismatches) + " mismatches" + first_mismatch);
+	}
+
+	class CountingHittable : public Hittable
+	{
+	public:
+		explicit CountingHittable(std::shared_ptr<Hittable> object) : object(std::move(object)) {}
+		bool Hit(const Ray& ray, Interval interval, HitRecord& rec) const override
+		{
+			++calls;
+			return object->Hit(ray, interval, rec);
+		}
+		AABB bounding_box() const override { return object->bounding_box(); }
+		mutable int calls = 0;
+	private:
+		std::shared_ptr<Hittable> object;
+	};
+
+	void test_bvh()
+	{
+		std::cout << "\n[bvh] accelerated intersections match the primitive list\n";
+		const auto matte = std::make_shared<Lambertian>(Color(0.5, 0.5, 0.5));
+		const Ray forward(Point3(0, 0, -3), Vector3(0, 0, 1));
+		HitRecord rec;
+		const Hittable_List empty;
+		const BVH_Node empty_tree(empty);
+		check(!empty_tree.Hit(forward, Interval(-infinity, infinity), rec), "empty BVH is a safe miss");
+		const AABB empty_bounds;
+		const AABB remote_bounds(Point3(10, 20, 30), Point3(11, 22, 33));
+		const AABB merged_bounds(empty_bounds, remote_bounds);
+		check(empty_bounds.surface_area() == 0.0 && !empty_bounds.hit(forward, Interval::universe) &&
+			merged_bounds.min().x() == 10 && merged_bounds.min().y() == 20 && merged_bounds.min().z() == 30 &&
+			merged_bounds.max().x() == 11 && merged_bounds.max().y() == 22 && merged_bounds.max().z() == 33,
+			"default AABB is empty and does not expand a union toward the origin");
+
+		const auto counted = std::make_shared<CountingHittable>(std::make_shared<Sphere>(Point3(0, 0, 0), 1.0, matte));
+		const BVH_Node single{ Hittable_List(counted) };
+		const bool single_hit = single.Hit(forward, Interval(0, infinity), rec);
+		check(single_hit && std::abs(rec.t - 2.0) < 1e-12 && counted->calls == 1,
+			"single-object BVH intersects its primitive once", "calls=" + std::to_string(counted->calls));
+		counted->calls = 0;
+		const bool corner_hit = single.Hit(Ray(Point3(0.9, 0.9, -3), Vector3(0, 0, 1)), Interval(0, infinity), rec);
+		check(!corner_hit && counted->calls == 1, "single leaf miss inside its bounds is tested once");
+
+		// Axis-parallel rays on a slab boundary must not depend on 0 * infinity producing NaN.
+		const AABB bounds(Point3(-1, -1, -1), Point3(1, 1, 1));
+		check(bounds.hit(Ray(Point3(1, 0, -3), Vector3(-0.0, 0, 1)), Interval(0, infinity)),
+			"parallel ray on an AABB face remains a candidate");
+		check(!bounds.hit(Ray(Point3(1.01, 0, -3), Vector3(0, 0, 1)), Interval(0, infinity)),
+			"parallel ray outside an AABB slab is rejected");
+		check(single.Hit(forward, Interval(2.0, 2.0), rec) && std::abs(rec.t - 2.0) < 1e-12,
+			"BVH retains a primitive hit at an inclusive interval endpoint");
+		const auto planar_triangle = std::make_shared<Triangle>(Point3(-1, -1, 0), Point3(1, -1, 0), Point3(0, 1, 0), matte);
+		const AABB planar_bounds = planar_triangle->bounding_box();
+		const BVH_Node planar_tree{ Hittable_List(planar_triangle) };
+		check(planar_bounds.z.size() == 0.0 && planar_bounds.hit(forward, Interval(0, infinity)) &&
+			planar_tree.Hit(forward, Interval(0, infinity), rec) && rec.t == 3.0,
+			"zero-thickness triangle bounds retain a crossing ray");
+
+		// A medium queries its boundary twice, starting with a range that includes negative t.
+		HitRecord entry, exit;
+		const Ray inside(Point3(0, 0, 0), Vector3(1, 0, 0));
+		const bool enters = single.Hit(inside, Interval(-infinity, infinity), entry);
+		const bool exits = enters && single.Hit(inside, Interval(entry.t + 0.0001, infinity), exit);
+		check(enters && exits && std::abs(entry.t + 1.0) < 1e-12 && std::abs(exit.t - 1.0) < 1e-12,
+			"BVH preserves negative entry and positive exit for a volume boundary");
+
+		Hittable_List mixed;
+		const auto moving_mat = std::make_shared<Lambertian>(Color(0.2, 0.3, 0.4));
+		const auto quad_mat = std::make_shared<Lambertian>(Color(0.3, 0.5, 0.2));
+		const auto triangle_mat = std::make_shared<Lambertian>(Color(0.7, 0.1, 0.2));
+		mixed.add(std::make_shared<Sphere>(Point3(-2, 0, 0), 0.8, matte));
+		mixed.add(std::make_shared<Sphere>(Point3(2, -0.5, 0), Point3(2, 0.5, 0), 0.45, moving_mat));
+		mixed.add(std::make_shared<Quad>(Point3(-4, -1, -3), Vector3(8, 0, 0), Vector3(0, 0, 6), quad_mat));
+		mixed.add(std::make_shared<Triangle>(Point3(-0.6, -0.6, -0.4), Point3(0.9, -0.6, -0.4),
+			Point3(0.1, 1, -0.4), triangle_mat));
+		// Separated groups exercise actual subdivision, including rays that miss the nearer group.
+		for (int i = 0; i < 18; ++i)
+			mixed.add(std::make_shared<Sphere>(Point3(6 + (i % 3) * 2, (i / 3) % 3 - 1, (i / 9) * 3), 0.35,
+				std::make_shared<Lambertian>(Color(0.2, 0.4, 0.6))));
+		std::vector<Ray> rays = {
+			Ray(Point3(-2, 0, -4), Vector3(0, 0, 1)),
+			Ray(Point3(2, -0.5, -4), Vector3(0, 0, 1), 0.0),
+			Ray(Point3(2, 0.5, -4), Vector3(0, 0, 1), 1.0),
+			Ray(Point3(0, 3, 2), Vector3(0, -1, 0)),
+			Ray(Point3(0, 0, -4), Vector3(0, 0, 1)),
+			Ray(Point3(-2, 0, 0), Vector3(1, 0, 0)),
+			Ray(Point3(30, 0, -4), Vector3(0, 0, 1))
+		};
+		const Material* targets[] = { matte.get(), moving_mat.get(), moving_mat.get(), quad_mat.get(), triangle_mat.get() };
+		bool covered = true;
+		for (size_t i = 0; i < 5; ++i)
+			covered = mixed.Hit(rays[i], Interval(0.001, infinity), rec) && rec.mat == targets[i] && covered;
+		check(covered, "reference rays cover all primitive types and both motion endpoints");
+
+		// A local fixed-seed generator keeps this test independent of other tests' RNG usage.
+		rng::PCG32 generator;
+		generator.seed(0xB17B5A4u, 0x1234567u);
+		auto uniform = [&](double lo, double hi) { return lo + (hi - lo) * generator.next_double(); };
+		for (int i = 0; i < 4096; ++i)
+		{
+			const Point3 origin(uniform(-7, 13), uniform(-3, 5), uniform(-8, -3));
+			const Point3 target(uniform(-4, 12), uniform(-1.5, 2.5), uniform(-1, 4));
+			rays.emplace_back(origin, target - origin, uniform(0, 1));
+		}
+		check_bvh_intersections(mixed, rays, Interval(0.001, infinity), "mixed BVH matches brute force (closest hit and record)");
+		check_bvh_intersections(mixed, rays, Interval(0.2, 0.85), "mixed BVH respects a clipped positive interval");
+		check_bvh_intersections(mixed, rays, Interval(-infinity, infinity), "mixed BVH matches brute force with negative t allowed");
+
+		// Equal centroids and one-dimensional centroid bounds must not cause an empty partition
+		// or unbounded recursion. Distinct radii avoid ambiguous equal-t material tie breaking.
+		Hittable_List concentric, collinear;
+		for (int i = 0; i < 37; ++i)
+		{
+			const auto material = std::make_shared<Lambertian>(Color(0.1 + i * 0.01, 0.3, 0.5));
+			concentric.add(std::make_shared<Sphere>(Point3(0, 0, 0), 0.15 + i * 0.05, material));
+			collinear.add(std::make_shared<Sphere>(Point3((i - 18) * 0.6, 0, 0), 0.2, material));
+		}
+		std::vector<Ray> degenerate_rays;
+		for (int i = 0; i < 1024; ++i)
+		{
+			const Point3 origin(uniform(-12, 12), uniform(-1, 1), -4);
+			const Point3 target(uniform(-11, 11), uniform(-0.25, 0.25), 0);
+			degenerate_rays.emplace_back(origin, target - origin);
+		}
+		degenerate_rays.emplace_back(Point3(0, 0, 0), Vector3(0, 0, 1));
+		check_bvh_intersections(concentric, degenerate_rays, Interval(0.001, infinity), "equal-centroid BVH matches brute force");
+		check_bvh_intersections(collinear, degenerate_rays, Interval(0.001, infinity), "collinear-centroid BVH matches brute force");
+		check_bvh_intersections(concentric, degenerate_rays, Interval(-infinity, -0.001), "equal-centroid BVH respects negative-only intervals");
+
+		// All quads cover the same point on z=0 but have centroids on opposite sides of x=0.
+		// More than one leaf is needed, so changing ray direction changes traversal order.
+		// The observable tie rule must remain the list's last-added material in either order.
+		const std::vector<Ray> tied_rays = {
+			Ray(Point3(-2, 0, -3), Vector3(2, 0, 3)),
+			Ray(Point3(2, 0, -3), Vector3(-2, 0, 3)),
+			Ray(Point3(-2, 0, 3), Vector3(2, 0, -3)),
+			Ray(Point3(2, 0, 3), Vector3(-2, 0, -3))
+		};
+		for (bool reverse_input : { false, true })
+		{
+			Hittable_List tied;
+			std::shared_ptr<Material> last_material;
+			for (int i = 0; i < 12; ++i)
+			{
+				const int position = reverse_input ? 11 - i : i;
+				const double reach = 20.0 + position;
+				const double left = position % 2 == 0 ? -reach : -1.0;
+				const double right = position % 2 == 0 ? 1.0 : reach;
+				last_material = std::make_shared<Lambertian>(Color(0.1 + 0.02 * position, 0.2, 0.3));
+				tied.add(std::make_shared<Quad>(Point3(left, -1, 0), Vector3(right - left, 0, 0), Vector3(0, 2, 0), last_material));
+			}
+			const BVH_Node tied_tree(tied);
+			bool matches = true;
+			for (const Ray& ray : tied_rays)
+			{
+				HitRecord expected, actual;
+				const bool reference_hit = tied.Hit(ray, Interval(0, 1), expected);
+				const bool accelerated_hit = tied_tree.Hit(ray, Interval(0, 1), actual);
+				matches = matches && reference_hit && accelerated_hit && expected.t == 1.0 && actual.t == expected.t &&
+					expected.mat == last_material.get() && actual.mat == expected.mat && actual.front_face == expected.front_face &&
+					(actual.n - expected.n).length() < 1e-12;
+			}
+			check(matches, std::string("equal-t hits preserve last-added material across leaves and ray directions (") +
+				(reverse_input ? "reversed" : "forward") + " input)");
+		}
+
+		// A duplicated one-object leaf would sample the same medium twice and increase its
+		// scattering probability from 1-exp(-density*length) to 1-exp(-2*density*length).
+		const auto boundary = std::make_shared<BVH_Node>(Hittable_List(
+			std::make_shared<Sphere>(Point3(0, 0, 0), 1.0, matte)));
+		const double density = 0.5;
+		const auto medium = std::make_shared<CountingHittable>(
+			std::make_shared<Constant_Medium>(boundary, density, Color(0.8, 0.8, 0.8)));
+		const BVH_Node medium_tree{ Hittable_List(medium) };
+		const int trials = 100000;
+		int scattered = 0;
+		bool in_boundary = true;
+		for (int i = 0; i < trials; ++i)
+		{
+			rng::begin_pixel_sample(0x514A9u, i, 0);
+			if (medium_tree.Hit(forward, Interval(0.001, infinity), rec))
+			{
+				++scattered;
+				in_boundary = in_boundary && rec.t >= 2.0 && rec.t <= 4.0;
+			}
+		}
+		const double expected_probability = 1.0 - std::exp(-density * 2.0);
+		const double observed_probability = static_cast<double>(scattered) / trials;
+		const double standard_error = std::sqrt(expected_probability * (1.0 - expected_probability) / trials);
+		check(medium->calls == trials && in_boundary, "single medium leaf is sampled once per ray within its boundary");
+		check(std::abs(observed_probability - expected_probability) < 5.0 * standard_error,
+			"single medium BVH scattering probability matches Beer-Lambert",
+			"observed=" + fmt(observed_probability, 6) + " expected=" + fmt(expected_probability, 6));
+
+		struct MediumCase { const char* name; Ray ray; Interval interval; };
+		const MediumCase medium_cases[] = {
+			{ "outside", forward, Interval(0.001, infinity) },
+			{ "inside", Ray(Point3(0, 0, 0), Vector3(0, 0, 1)), Interval::universe },
+			{ "clipped segment", forward, Interval(2.4, 3.6) },
+			{ "clipped before entry", forward, Interval(0.0, 1.5) },
+			{ "clipped after exit", forward, Interval(4.5, 10.0) },
+			{ "boundary origin", Ray(Point3(0, 0, -1), Vector3(0, 0, 2)), Interval(0.001, 0.2) },
+			{ "miss", Ray(Point3(3, 0, -3), Vector3(0, 0, 1)), Interval(0.001, infinity) }
+		};
+		for (const MediumCase& c : medium_cases)
+		{
+			int mismatches = 0;
+			for (uint64_t seed = 0; seed < 1024; ++seed)
+			{
+				HitRecord direct, accelerated;
+				rng::begin_pixel_sample(0xC05EEDu, seed, 0);
+				const bool direct_hit = medium->Hit(c.ray, c.interval, direct);
+				const rng::PCG32 direct_state = rng::thread_generator();
+				rng::begin_pixel_sample(0xC05EEDu, seed, 0);
+				const bool accelerated_hit = medium_tree.Hit(c.ray, c.interval, accelerated);
+				const rng::PCG32 accelerated_state = rng::thread_generator();
+				const bool same_record = direct_hit == accelerated_hit &&
+					(!direct_hit || (direct.t == accelerated.t && direct.mat == accelerated.mat));
+				if (!same_record || direct_state.state != accelerated_state.state || direct_state.inc != accelerated_state.inc)
+					++mismatches;
+			}
+			check(mismatches == 0, std::string("single medium direct/BVH hit and RNG state agree: ") + c.name,
+				std::to_string(mismatches) + " mismatches across 1024 seeds");
+		}
+
+		// volume_small normally holds a primitive list: explicitly wrap it here so this checks
+		// the new BVH's stochastic traversal, not just the scene's pre-existing render path.
+		auto render_volume = [](int threads)
+		{
+			rng::seed_thread(314159);
+			SceneDesc scene = find_scene("volume_small")->build();
+			const Hittable_List accelerated(std::make_shared<BVH_Node>(scene.world));
+			scene.cam.image_width = 24;
+			scene.cam.sample_per_pixel = 8;
+			scene.cam.max_depth = 12;
+			scene.cam.seed = 314159;
+			scene.cam.thread_count = threads;
+			scene.cam.write_outputs = false;
+			scene.cam.verbose = false;
+			scene.cam.Render(accelerated, scene.lights);
+			return scene.cam.LastFramebuffer();
+		};
+		const auto serial_volume = render_volume(1);
+		const auto three_thread_volume = render_volume(3);
+		const auto all_thread_volume = render_volume(0);
+		bool identical = serial_volume.size() == three_thread_volume.size() && serial_volume.size() == all_thread_volume.size();
+		double energy = 0.0;
+		for (size_t i = 0; identical && i < serial_volume.size(); ++i)
+			for (int channel = 0; channel < 3; ++channel)
+			{
+				const double value = serial_volume[i][channel];
+				identical = identical && std::isfinite(value) && value == three_thread_volume[i][channel] &&
+					value == all_thread_volume[i][channel];
+				energy += value;
+			}
+		check(identical && energy > 0.0, "BVH volume image is finite and bit-identical for 1 / 3 / all threads");
+	}
+
 	void test_hot_path_allocations()
 	{
 		std::cout << "\n[perf] heap allocations in the path-tracing hot path (Audit P-1)\n";
@@ -1161,6 +1457,7 @@ int run_unit_tests(const std::string& filter)
 		{ "light", test_light_pdf },
 		{ "lightsampler", test_light_sampler },
 		{ "tangent", test_sphere_tangent_frame },
+		{ "bvh", test_bvh },
 		{ "bsdf", test_bsdf },
 		{ "texture", test_texture_decode },
 		{ "determinism", test_determinism },

@@ -8,7 +8,7 @@ class AABB
 public :
 	Interval x, y, z;
 
-	AABB() {}
+	AABB() : x(infinity, -infinity), y(infinity, -infinity), z(infinity, -infinity) {}
 
 	AABB(const Interval& x, const Interval& y, const Interval& z) : x(x), y(y), z(z) 
 	{
@@ -44,12 +44,20 @@ public :
 
 	bool hit(const Ray& ray, Interval ray_t) const
 	{
+		if (ray_t.max < ray_t.min) return false;
 		const Point3& origin = ray.origin();
 		const Vector3& direction = ray.direction();
 
 		for (int axis = 0; axis < 3; axis++)
 		{
 			const Interval& ax = axis_interval(axis);
+			if (ax.max < ax.min) return false;
+			// Avoid 0 * infinity for parallel rays originating on a slab boundary.
+			if (direction[axis] == 0.0)
+			{
+				if (!ax.contains(origin[axis])) return false;
+				continue;
+			}
 			const double axDirInv = 1.0 / direction[axis];
 
 			auto t0 = (ax.min - origin[axis]) * axDirInv;
@@ -64,9 +72,16 @@ public :
 			if (t0 > ray_t.min) ray_t.min = t0;
 			if (t1 < ray_t.max) ray_t.max = t1;
 
-			if (ray_t.max <= ray_t.min) return false;
+			if (ray_t.max < ray_t.min) return false;
 		}
 		return true;
+	}
+
+	double surface_area() const
+	{
+		const double dx = x.size(), dy = y.size(), dz = z.size();
+		if (dx < 0.0 || dy < 0.0 || dz < 0.0) return 0.0;
+		return 2.0 * (dx * dy + dx * dz + dy * dz);
 	}
 
 	// Returns the index of the longest axis of the bounding box

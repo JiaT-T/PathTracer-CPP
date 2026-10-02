@@ -37,7 +37,7 @@
 
 **几何与加速结构**
 - `Sphere`（静态 / 运动模糊）、`Quad`、`Box`、`Triangle`（flat / smooth，UV，逐面切线）、`Constant_Medium`
-- `Translation`、`Rotate_Y`、`Scale`；二叉 BVH（object median 分割，递归遍历）
+- `Translation`、`Rotate_Y`、`Scale`；二叉 BVH（三轴 16 桶 SAH、真实叶子、按射线方向选择遍历顺序）
 
 **材质（`Material::GetBSDF` → 栈上的 `BSDF` 值类型）**
 - `Lambertian`、`Metal`（fuzz 到表面以下的方向会被吸收）、`Dielectric`、`Diffuse_Light`（单面发光）、`isotropic`（相位函数）
@@ -59,7 +59,7 @@
 - 确定性渲染：固定 seed 时，任何线程数下都得到逐位相同的图像
 - 输出：tonemap 后的 PPM，另外输出线性 HDR 的 PFM（降噪版本单独一份），可选 Debug AOV
 - CLI：场景选择、spp、分辨率、depth、seed、线程数、AOV、降噪模式
-- 测试：`--test`（179 项数值检查）、`--regress`（7 个固定 seed 的场景）、`--bench`、`--denoise-eval`
+- 测试：`--test`（数值与 BVH 检查）、`--test bvh`、`--regress`（7 个固定 seed 的场景）、`--bench`、`--denoise-eval`
 - 渐进式预览窗口（Win32）
 
 ## 渲染管线
@@ -156,7 +156,8 @@ CLI (Renderer.cpp) → scene_registry() → SceneDesc{world, lights, camera}
 
 ```powershell
 cd PathTracer-CPP
-x64\Release\PathTracer-CPP.exe --test          # 179 项检查，约 10 s
+x64\Release\PathTracer-CPP.exe --test          # 全部数值与渲染检查
+x64\Release\PathTracer-CPP.exe --test bvh      # 求交一致性、退化输入、介质与线程确定性
 x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考图生成约 20 s）
 ```
 
@@ -165,6 +166,7 @@ x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考�
 - **白炉测试**：Lambert = 1；白色电介质 PBR = 1 ± 1%；白色金属与精确的 height-correlated Smith 单次散射参考值一致；相位函数反照率；
 - BRDF 互易性；采样得到的 pdf 与单独求值的 pdf 一致；纹理解码（128 → 线性 0.502 / sRGB 0.216）；
 - 渲染：多线程确定性；开启和关闭 Russian roulette 时均值一致；每条相机路径的堆分配次数为 0；emission + direct + indirect = beauty；法线贴图在三角形和 `Sphere` 上都生效；降噪降低 relMSE 且保持均值不变。
+- BVH：固定射线与线性遍历的最近命中及主要命中属性一致；空树、单图元、退化中心、平行射线、零厚度盒和区间端点；同距离命中按原输入顺序选择材质；单介质叶的随机数状态及散射概率；BVH 体积场景跨线程逐位一致。
 
 `--regress` 使用固定 seed 渲染 `furnace_lambert` / `furnace_volume`（解析值为 1）、`furnace_pbr`、`cornell_small`、`volume_small`、`normal_map_small`、`environment_small`，与 `tests/reference/*.pfm`（1024 spp）比较 relMSE 和图像均值。有意改动渲染结果时，用 `--regress --update-references` 更新参考图。
 
@@ -181,15 +183,44 @@ x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考�
 
 ## Benchmark
 
-`--bench`：`pbr_benchmark`，800×450，400 spp，max depth 20，seed 1，Release x64，MSVC 19.38（v143），Intel Core Ultra 7 265KF（20 线程，8P + 12E），每项跑 1 次。
+### Native SAH 对照（2026-10-02）
+
+基线为 `3769026`，对照本次三轴 16 桶 SAH、真实叶子和方向遍历的完整改动。同机 Release x64、MSVC 19.38、Core Ultra 7 265KF，seed 1、宽 400、64 spp、场景默认深度；teapot 为 400×400，另两场景为 400×225。两个版本使用同一临时驱动，分别链接各自的场景实现；先预热 GGX 表和一次 20 线程渲染，再在 1 / 20 线程各测 5 次。只计 `Camera::Render`，不含构建、预览、降噪、哈希和文件输出。
+
+下表单位为毫秒，格式是 **中位数 [最小值, 最大值]**：
+
+| 场景 | 线程 | 基线 | SAH | 中位耗时变化 |
+|---|---:|---:|---:|---:|
+| teapot | 1 | 4782.5 [4736.5, 4835.6] | 3548.8 [3536.2, 3663.1] | -25.8% |
+| teapot | 20 | 325.3 [308.7, 363.3] | 298.3 [258.7, 317.0] | -8.3% |
+| pbr_benchmark | 1 | 2153.2 [2152.2, 2172.3] | 2251.6 [2196.3, 2446.9] | +4.6% |
+| pbr_benchmark | 20 | 151.0 [145.6, 153.6] | 152.4 [146.2, 157.0] | +0.9% |
+| readme_showcase | 1 | 6635.0 [6525.4, 6722.7] | 6455.1 [6383.6, 6647.6] | -2.7% |
+| readme_showcase | 20 | 416.2 [394.4, 421.3] | 396.3 [385.7, 411.7] | -4.8% |
+
+teapot 每条射线的节点访问从 23.068 降至 14.971，图元测试从 3.913 降至 1.804，分别减少 35.1% 和 53.9%。PBR / 展示场景的节点访问反而增加约 5%，虽然图元测试减少，但耗时收益有限；本次 PBR 单线程还有小幅回退，不能据此宣称所有场景都加速。20 线程短任务的波动较大，上述结果是这次测量的分布。
+
+三个场景在两版本、两种线程数和所有重复轮次中的原始 double 像素哈希均一致，输出 PFM 的 SHA-256 也一致。单次场景加载及构建耗时为：teapot 10.83 → 12.70 ms，PBR 0.050 → 0.060 ms，展示场景 394.25 → 389.31 ms；其中包含 OBJ / 纹理加载，不能当作纯 BVH 构建基准。
+
+可用内置基准复查渲染耗时与计数器（在两个版本分别执行，并替换场景名）：
+
+```powershell
+x64\Release\PathTracer-CPP.exe --bench --scene teapot --width 400 --spp 64 --seed 1 --threads-list 20,1,1,1,1,1,20,20,20,20,20 --repeat 1
+```
+
+首行 20 线程作为预热，余下各组取 5 次的中位数及范围；内置 `--repeat 5` 报告最快值，不等同于这里的中位数。
+
+### SAH 改造前的线程扩展记录
+
+以下保留 SAH 改造前（`3769026`）的历史基准。`--bench`：`pbr_benchmark`，800×450，400 spp，max depth 20，seed 1，Release x64，MSVC 19.38（v143），Intel Core Ultra 7 265KF（20 线程，8P + 12E），每项跑 1 次。`--bench` 计时不包含场景构建、预览、降噪和输出。
 
 | 版本 | 1 线程 | 20 线程 | 加速比 |
 |---|---:|---:|---:|
 | 原始代码 + Audit 修复（`74c3601`，旧的 `PBR_Benchmark()`，`std::execution::par`） | 98.33 s | 47.19 s | 2.08× |
 | 积分器重构前（`2a80474`，新的 harness） | 74.66 s | 46.77 s | 1.60× |
-| **当前版本** | **54.73 s** | **3.42 s** | **16.01×** |
+| **积分器重构后、SAH 改造前** | **54.73 s** | **3.42 s** | **16.01×** |
 
-当前版本的线程扩展：
+同一历史版本的线程扩展：
 
 | 线程 | 时间 (s) | MRays/s | 加速比 | 效率 |
 |---:|---:|---:|---:|---:|
@@ -200,7 +231,7 @@ x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考�
 | 16 | 4.108 | 122.00 | 13.32× | 83.3% |
 | 20 | 3.420 | 146.55 | 16.01× | 80.0% |
 
-每条相机路径：1 条主射线 + 0.558 条延续射线 + 1.922 条阴影射线；每条射线平均访问 5.36 个 BVH 节点、测试 2.92 个图元；渲染过程中的堆分配共 22 次（缓冲区和线程），相当于每条路径 0 次。
+以上历史基准中，每条相机路径：1 条主射线 + 0.558 条延续射线 + 1.922 条阴影射线；每条射线平均访问 5.36 个 BVH 节点、测试 2.92 个图元；渲染过程中的堆分配共 22 次（缓冲区和线程），相当于每条路径 0 次。
 
 扩展性的主要改善来自两处：去掉热路径上的 `make_shared`（每次反弹 2–6 次），以及把 `HitRecord::mat` 从 `shared_ptr` 改为裸指针（此前每次图元命中都会对同一个控制块做原子增减，所有线程在这里竞争）。另外，延续射线兼做 BSDF 的 MIS 样本，每次反弹少追踪一条射线。旧 README 中的 `65.3 s / 30.0 s / 2.18×` 是在另一台机器（Core Ultra 9 275HX）上测得的，而且当时这个场景的面积光朝向是反的（Audit F7），与这里的数字不能直接比较。
 
@@ -273,7 +304,7 @@ x64\Release\PathTracer-CPP.exe --help
 
 ## 当前限制
 
-- BVH 采用 object median 分割、递归遍历，没有 SAH，也没有扁平化；三角形作为单独的堆对象存储。网格场景的性能尚未优化。
+- BVH 已采用分桶 SAH，但仍是递归指针树，没有扁平化；三角形作为单独的堆对象存储。按分割轴方向选择子树只是近侧启发式，未按实际包围盒入口距离排序。
 - 三角形求交会把 `p` 沿面法线偏移 0.001（绝对值，与场景尺度无关），用三角网格建模的玻璃会自相交。
 - 法线贴图：切线按面计算，没有 handedness，没有 shadow terminator 处理；OBJ 中的 `map_bump`（高度图）会被当作法线贴图，UV 被 clamp，`map_d` 被忽略。
 - GGX 只有单次散射（粗糙金属偏暗），没有粗糙透射；`Dielectric` 从光密介质射出时，Schlick 使用的是入射角。
