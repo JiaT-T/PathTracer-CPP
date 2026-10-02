@@ -1,91 +1,208 @@
 #pragma once
-#include <vector>
-#include "Hittable_List.h"
-#include "My_Common.h"
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <memory>
+#include <vector>
 
+#include "Hittable_List.h"
+
+// Binary BVH using a 16-bin surface-area heuristic on all three centroid axes.
+// Construction caches primitive bounds once and never consumes the renderer RNG.
 class BVH_Node : public Hittable
 {
-public :
-	BVH_Node(Hittable_List list) : BVH_Node(list.objects, 0, list.objects.size()) {}
+public:
+	explicit BVH_Node(const Hittable_List& list)
+		: BVH_Node(list.objects, 0, list.objects.size()) {}
 
-	BVH_Node(std::vector<std::shared_ptr<Hittable>>& objects, size_t start, size_t end)
+	BVH_Node(const std::vector<std::shared_ptr<Hittable>>& objects, size_t start, size_t end)
 	{
-		bbox = AABB::empty;
-		for (size_t i = start; i < end; i++ )
+		std::vector<BuildPrimitive> primitives;
+		primitives.reserve(end - start);
+		for (size_t i = start; i < end; ++i)
 		{
-			bbox = AABB(bbox, objects[i]->bounding_box());
+			const AABB bounds = objects[i]->bounding_box();
+			primitives.push_back({ objects[i], bounds, 0.5 * bounds.min() + 0.5 * bounds.max(), i });
 		}
-
-		int axis = bbox.longest_axis();
-
-		// The reason why those three functions are unparenthesized is
-		// that they only need to be called in the std::sort, 
-		// and the sort will call them with the correct parameters
-		auto compartator = (axis == 0) ? box_compare_x :
-						   (axis == 1) ? box_compare_y :
-						   box_compare_z;
-		size_t object_span = end - start;
-		if (object_span == 1)
-			left = right = objects[start];
-		else if (object_span == 2)
-		{
-			left = objects[start];
-			right = objects[start + 1];
-		}
-		else
-		{
-			// Sort the objects according to the selected axis, and then split them into two halves
-			// Let the left half be the left child of the BVH node, 
-			// and the right half be the right child of the BVH node
-			std::sort(std::begin(objects) + start, std::begin(objects) + end, compartator);
-			auto middle = start + object_span / 2;
-
-			left = std::make_shared<BVH_Node>(objects, start, middle);
-			right = std::make_shared<BVH_Node>(objects, middle, end);
-		}
+		build(primitives, 0, primitives.size(), 0);
 	}
 
 	bool Hit(const Ray& ray, Interval ray_t, HitRecord& rec) const override
 	{
-		PT_COUNT_BVH_NODE();
-		if (!bbox.hit(ray, ray_t))
-			return false;
-
-		bool hit_left = left->Hit(ray, ray_t, rec);
-		Interval hit_interval_right(ray_t.min, hit_left ? rec.t : ray_t.max);
-		bool hit_right = right->Hit(ray, hit_interval_right, rec);
-
-		return hit_left || hit_right;			
+		bool found = false;
+		size_t hit_index = 0;
+		hit_nearest(ray, ray_t, rec, found, hit_index);
+		return found;
 	}
 
 	AABB bounding_box() const override { return bbox; }
 
-private :
-	std::shared_ptr<Hittable> left;
-	std::shared_ptr<Hittable> right;
+private:
+	static constexpr int kBinCount = 16;
+	static constexpr size_t kMaxLeafSize = 4;
+	static constexpr int kMaxBuildDepth = 64;
+	struct BuildPrimitive
+	{
+		std::shared_ptr<Hittable> object;
+		AABB bounds;
+		Point3 centroid;
+		size_t index;
+	};
+	struct LeafPrimitive
+	{
+		std::shared_ptr<Hittable> object;
+		size_t index;
+	};
+	struct Bin
+	{
+		AABB bounds;
+		size_t count = 0;
+	};
+
+	std::unique_ptr<BVH_Node> left, right;
+	std::vector<LeafPrimitive> leaf;
 	AABB bbox;
+	int split_axis = 0;
 
-	static bool box_compare(const std::shared_ptr<Hittable>& a, const std::shared_ptr<Hittable>& b, int axisIndex)
+	BVH_Node() = default;
+
+	void hit_nearest(const Ray& ray, Interval ray_t, HitRecord& rec, bool& found, size_t& hit_index) const
 	{
-		auto a_interval = a->bounding_box().axis_interval(axisIndex);
-		auto b_interval = b->bounding_box().axis_interval(axisIndex);
-		return a_interval.min < b_interval.min;
+		PT_COUNT_BVH_NODE();
+		if (!bbox.hit(ray, ray_t)) return;
+		if (!left)
+		{
+			HitRecord candidate;
+			for (const auto& primitive : leaf)
+			{
+				if (primitive.object->Hit(ray, ray_t, candidate) &&
+					(!found || candidate.t < rec.t || (candidate.t == rec.t && primitive.index > hit_index)))
+				{
+					found = true;
+					ray_t.max = candidate.t;
+					rec = candidate;
+					hit_index = primitive.index;
+				}
+			}
+			return;
+		}
+
+		// Lower centroid bins go left. Direction ordering is a cheap near-side
+		// heuristic, not an exact ordering of overlapping child bounding boxes.
+		const bool reverse = ray.direction()[split_axis] < 0.0;
+		const BVH_Node* first = reverse ? right.get() : left.get();
+		const BVH_Node* second = reverse ? left.get() : right.get();
+		first->hit_nearest(ray, ray_t, rec, found, hit_index);
+		if (found) ray_t.max = rec.t;
+		// Keep t_min unchanged (medium entry/exit queries may start behind the ray).
+		// Equal-distance hits remain eligible; later input primitives win ties,
+		// matching Hittable_List independently of the tree's traversal order.
+		second->hit_nearest(ray, ray_t, rec, found, hit_index);
 	}
 
-	static bool box_compare_x(const std::shared_ptr<Hittable>& a, const std::shared_ptr<Hittable>& b)
+	static int bin_index(double centroid, double minimum, double extent)
 	{
-		return box_compare(a, b, 0);
+		return std::clamp(static_cast<int>(kBinCount * ((centroid - minimum) / extent)), 0, kBinCount - 1);
 	}
 
-	static bool box_compare_y(const std::shared_ptr<Hittable>& a, const std::shared_ptr<Hittable>& b)
+	void make_leaf(const std::vector<BuildPrimitive>& primitives, size_t start, size_t end)
 	{
-		return box_compare(a, b, 1);
+		leaf.reserve(end - start);
+		for (size_t i = start; i < end; ++i)
+			leaf.push_back({ primitives[i].object, primitives[i].index });
 	}
 
-	static bool box_compare_z(const std::shared_ptr<Hittable>& a, const std::shared_ptr<Hittable>& b)
+	void build(std::vector<BuildPrimitive>& primitives, size_t start, size_t end, int depth)
 	{
-		return box_compare(a, b, 2);
+		const size_t count = end - start;
+		if (count == 0) return;
+		Point3 centroid_min(infinity, infinity, infinity);
+		Point3 centroid_max(-infinity, -infinity, -infinity);
+		bool finite_centroids = true;
+		for (size_t i = start; i < end; ++i)
+		{
+			bbox = AABB(bbox, primitives[i].bounds);
+			for (int axis = 0; axis < 3; ++axis)
+			{
+				const double c = primitives[i].centroid[axis];
+				finite_centroids = finite_centroids && std::isfinite(c);
+				centroid_min[axis] = std::min(centroid_min[axis], c);
+				centroid_max[axis] = std::max(centroid_max[axis], c);
+			}
+		}
+		if (count == 1 || depth >= kMaxBuildDepth)
+		{
+			make_leaf(primitives, start, end);
+			return;
+		}
+
+		const double parent_area = bbox.surface_area();
+		double best_cost = infinity;
+		int best_axis = -1, best_bin = -1;
+		for (int axis = 0; axis < 3 && finite_centroids && parent_area > 0.0 && std::isfinite(parent_area); ++axis)
+		{
+			const double extent = centroid_max[axis] - centroid_min[axis];
+			if (!(extent > 0.0) || !std::isfinite(extent)) continue;
+			std::array<Bin, kBinCount> bins;
+			for (size_t i = start; i < end; ++i)
+			{
+				Bin& bin = bins[bin_index(primitives[i].centroid[axis], centroid_min[axis], extent)];
+				++bin.count;
+				bin.bounds = AABB(bin.bounds, primitives[i].bounds);
+			}
+
+			std::array<double, kBinCount - 1> left_area_count;
+			std::array<size_t, kBinCount - 1> left_count;
+			AABB bounds;
+			size_t n = 0;
+			for (int b = 0; b < kBinCount - 1; ++b)
+			{
+				if (bins[b].count) bounds = AABB(bounds, bins[b].bounds);
+				n += bins[b].count;
+				left_count[b] = n;
+				left_area_count[b] = bounds.surface_area() * static_cast<double>(n);
+			}
+			bounds = AABB();
+			n = 0;
+			for (int b = kBinCount - 1; b > 0; --b)
+			{
+				if (bins[b].count) bounds = AABB(bounds, bins[b].bounds);
+				n += bins[b].count;
+				if (left_count[b - 1] == 0 || n == 0) continue;
+				// Unit traversal / primitive costs, compared with the leaf cost N.
+				const double cost = 1.0 + (left_area_count[b - 1] + bounds.surface_area() * static_cast<double>(n)) / parent_area;
+				if (cost < best_cost)
+				{
+					best_cost = cost;
+					best_axis = axis;
+					best_bin = b - 1;
+				}
+			}
+		}
+
+		if (count <= kMaxLeafSize && best_cost >= static_cast<double>(count))
+		{
+			make_leaf(primitives, start, end);
+			return;
+		}
+
+		size_t middle = start + count / 2;
+		if (best_axis >= 0)
+		{
+			split_axis = best_axis;
+			const double extent = centroid_max[best_axis] - centroid_min[best_axis];
+			const auto split = std::stable_partition(primitives.begin() + start, primitives.begin() + end,
+				[&](const BuildPrimitive& p) {
+					return bin_index(p.centroid[best_axis], centroid_min[best_axis], extent) <= best_bin;
+				});
+			middle = static_cast<size_t>(split - primitives.begin());
+		}
+		// Coincident centroids / invalid costs: stable count split guarantees progress.
+		if (middle == start || middle == end) middle = start + count / 2;
+		left.reset(new BVH_Node());
+		right.reset(new BVH_Node());
+		left->build(primitives, start, middle, depth + 1);
+		right->build(primitives, middle, end, depth + 1);
 	}
 };
 
