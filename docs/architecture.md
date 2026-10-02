@@ -40,6 +40,8 @@ Renderer.cpp (CLI)
 | Textures | `Texture.h`, `rtw_stb_image.h` | sRGB / linear decoding (single decode, fix F1), nearest-neighbour lookup |
 | AOVs | `RenderAOV.h` | per-pixel accumulation of AOVs, luminance moments (variance), denoiser guides; visualization |
 | Denoiser | `PostProcess.h` | variance-guided A-Trous with conservative albedo demodulation; `Settings::legacy()` = previous filter |
+| Display | `Color.h`, `ImageIO.h` | EV exposure, Reinhard / compact AgX, one sRGB transfer; shared PPM / preview conversion; PFM stays linear |
+| Preview | `RenderPreview.h`, `PPMPreviewWindow.h` | pass snapshots, cached raw / filtered linear frames, display-only keyboard controls and explicit snapshot save |
 | Statistics | `Stats.h/.cpp` | per-thread ray / traversal counters, global allocation counter |
 | Tests | `Tests.cpp` | numerical unit tests, regression against `tests/reference/*.pfm`, denoiser evaluation |
 | Benchmark | `Benchmark.cpp` | thread-scaling table, counters, environment description |
@@ -81,6 +83,12 @@ split into emission / direct / indirect, first-vertex pdfs and MIS weight, the p
 denoiser guide (first non-delta vertex).
 
 ## Invariants protected by tests
+
+- Progressive preview filters coherent color/guide data only at pass barriers, starting at
+  8 spp and at most once per configured interval (default 0.75 s after filter completion).
+  Intermediate filtering uses at most two iterations and the render thread budget. Final
+  filtering uses the selected full settings. Exposure, tone mapping, preview filtering and
+  pass grouping leave the raw framebuffer, AOVs and final denoised result unchanged.
 
 - BVH intersections agree with a linear list for fixed rays, moving geometry, clipped and
   negative intervals; empty/degenerate inputs and equal-distance material selection are

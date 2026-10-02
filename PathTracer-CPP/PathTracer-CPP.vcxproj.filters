@@ -65,6 +65,9 @@
     <ClInclude Include="Camera.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="RenderPreview.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="Interval.h">
       <Filter>头文件</Filter>
     </ClInclude>

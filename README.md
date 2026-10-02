@@ -60,7 +60,7 @@
 - 输出：tonemap 后的 PPM，另外输出线性 HDR 的 PFM（降噪版本单独一份），可选 Debug AOV
 - CLI：场景选择、spp、分辨率、depth、seed、线程数、AOV、降噪模式
 - 测试：`--test`（数值与 BVH 检查）、`--test bvh`、`--regress`（7 个固定 seed 的场景）、`--bench`、`--denoise-eval`
-- 渐进式预览窗口（Win32）
+- 渐进式预览窗口（Win32）：曝光、Reinhard / AgX 切换、定时降噪预览与原图对比
 
 ## 渲染管线
 
@@ -71,7 +71,7 @@ CLI (Renderer.cpp) → scene_registry() → SceneDesc{world, lights, camera}
     ray = get_ray(i, j, s)          分层 + 按像素打乱顺序的子像素抖动、景深、时间
     L = PathIntegrator::Li(ray)     NEE + MIS + RR，同时记录 AOV / guide
 → 线性 framebuffer → variance-guided A-Trous 降噪
-→ PFM（线性）/ PPM（Reinhard + sRGB）/ AOV 的 PFM + PPM
+→ PFM（线性）/ PPM（曝光 → Reinhard 或 AgX → sRGB）/ AOV 的 PFM + PPM
 ```
 
 模块关系见 [`docs/architecture.md`](docs/architecture.md)。
@@ -112,13 +112,26 @@ CLI (Renderer.cpp) → scene_registry() → SceneDesc{world, lights, camera}
 
 | 文件 | 内容 |
 |---|---|
-| `<out>.ppm` | 显示用图像：逐通道 Reinhard → sRGB → 8 bit；默认使用降噪结果 |
+| `<out>.ppm` | 显示用图像：曝光 → 色调映射 → sRGB → 8 bit；默认使用降噪结果 |
 | `<out>_raw.ppm` | `--output-mode both` 时额外写出的未降噪图像 |
 | `<out>.pfm` | **线性 HDR、未降噪**的估计值，用于数值比较 |
 | `<out>_denoised.pfm` | 线性 HDR 的降噪结果 |
 | `<out>_<aov>.pfm` / `.ppm` | Debug AOV（线性值，以及可视化图） |
+| `<out>_preview.ppm` | 在预览窗口按 `S` 保存的当前画面，含当时的显示参数 |
 
 `tools/imgtool.py`（只依赖 Python 标准库）可以把 PFM/PPM 转成 PNG，也能拼图、裁剪、做差分图，以及计算 RMSE / relMSE。
+
+### 曝光与色调映射
+
+`--exposure <EV>` 调整显示曝光（范围 −20～+20，+1 EV 对应线性值乘 2），`--tonemap reinhard|agx` 选择色调映射。默认 `0 EV + Reinhard` 保持原有显示效果。AgX 使用紧凑多项式近似，改善高亮颜色过饱和；不是 Blender 完整 OCIO 管线的精确复现，来源及许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+```powershell
+PathTracer-CPP.exe --scene readme_showcase --width 800 --spp 256 --seed 1 --exposure 0.5 --tonemap agx --keep-preview
+```
+
+预览窗口快捷键：`+ / -` 每次调整 0.5 EV，`0` 重置曝光，`T` 切换色调映射，`D` 切换原图 / 降噪图，`S` 保存当前显示图。调整使用缓存的线性图像，渲染结束后也可操作，无需重新追踪。窗口显示渲染进度和**当前所显示图像的 spp**；等待第一次降噪时先显示原图。
+
+自动输出遵循 `--output-mode`，并使用渲染完成时的曝光和色调映射；完成后继续调整可按 `S` 保存为独立的 `_preview.ppm`。曝光、色调映射和预览降噪都不改变原始线性 PFM、采样序列或 Debug AOV 的编码。
 
 ## Debug AOV
 
@@ -152,6 +165,10 @@ CLI (Renderer.cpp) → scene_registry() → SceneDesc{world, lights, camera}
 
 `readme_showcase`，64 spp：raw / 旧滤波器 / variance-guided。spp 很低时，大面积平坦区域仍会出现 A-Trous 特有的斑块。
 
+渐进预览默认从达到 **8 spp 的完整采样批次**开始降噪，中间预览最多执行 2 轮 A-Trous；之后与上次降噪完成至少间隔 0.75 秒，实际刷新还取决于采样批次耗时。完成时按所选降噪器执行完整轮数，最终输出不受中间预览的简化设置影响。
+
+`--preview-interval <秒>` 可调整间隔（0～3600），`--preview-denoise off` 可关闭中间预览降噪；`--denoiser off` 关闭全部降噪。`--no-preview` 不执行任何中间预览工作。颜色与 guide 在同一个采样批次结束后取快照，降噪复用 `--threads` 预算，执行期间暂停下一批采样，避免同时占满两套线程。它仍会增加整体渲染耗时，默认限频用于控制这部分开销。
+
 ## 测试与回归
 
 ```powershell
@@ -167,6 +184,7 @@ x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考�
 - BRDF 互易性；采样得到的 pdf 与单独求值的 pdf 一致；纹理解码（128 → 线性 0.502 / sRGB 0.216）；
 - 渲染：多线程确定性；开启和关闭 Russian roulette 时均值一致；每条相机路径的堆分配次数为 0；emission + direct + indirect = beauty；法线贴图在三角形和 `Sphere` 上都生效；降噪降低 relMSE 且保持均值不变。
 - BVH：固定射线与线性遍历的最近命中及主要命中属性一致；空树、单图元、退化中心、平行射线、零厚度盒和区间端点；同距离命中按原输入顺序选择材质；单介质叶的随机数状态及散射概率；BVH 体积场景跨线程逐位一致。
+- 环境采样：CDF 粗索引与完整 `lower_bound` 的索引一致，包括平台、桶边界及相邻浮点数；线性 / sRGB、黑行、单亮 texel、强度与旋转、接缝与极点；PDF / radiance 查询缓存的两种调用顺序逐位一致。
 
 `--regress` 使用固定 seed 渲染 `furnace_lambert` / `furnace_volume`（解析值为 1）、`furnace_pbr`、`cornell_small`、`volume_small`、`normal_map_small`、`environment_small`，与 `tests/reference/*.pfm`（1024 spp）比较 relMSE 和图像均值。有意改动渲染结果时，用 `--regress --update-references` 更新参考图。
 
@@ -182,6 +200,26 @@ x64\Release\PathTracer-CPP.exe --regress       # 7 个场景，约 1 s（参考�
 粗糙金属剩余的能量损失（例如 r=1 正入射时为 0.31）是单次散射 GGX 固有的，目前还没有做多次散射补偿。
 
 ## Benchmark
+
+### 环境光采样与查询缓存（2026-10-02）
+
+基线为已合入 SAH 的 `0a93e6f`。本次为 HDR 环境图预存每个 texel 的概率，并用 64 桶粗索引缩小 CDF 的二分搜索范围。PDF 与 radiance 共用栈上的方向查询缓存；只有环境对象和最终归一化方向的 double 位表示完全一致时才复用 UV，保留原来的归一化次数、CDF、随机数消耗和完整光源混合 PDF。阴影射线仍查询最近交点，确认未命中后才读取环境辐射。
+
+Release x64、MSVC 19.38、Core Ultra 7 265KF，seed 1、宽 400、32 spp、各场景默认深度，单线程固定到逻辑处理器 4。按 **基线 → 新版 → 新版 → 基线** 交错执行，每组先预热 GGX 表及一次渲染，再测 3 次，每版本共 6 次。仅计 `Camera::Render`，不含加载、预览、降噪、哈希和文件输出。下表为毫秒，中位数后附 [最小值, 最大值]；茶壶是 400×400，另两场景是 400×225。
+
+| 场景 | 基线 | 缓存后 | 墙钟耗时变化 | 进程 CPU 时间中位数 |
+|---|---:|---:|---:|---:|
+| readme_showcase | 4015.5 [3967.7, 4064.9] | 3764.6 [3748.3, 3955.7] | -6.2% | 3953.1 → 3710.9 ms |
+| pbr_benchmark | 1445.3 [1417.5, 1468.0] | 1475.4 [1440.0, 1520.5] | +2.1% | 1429.7 → 1468.8 ms |
+| teapot | 2254.6 [2247.8, 2268.9] | 2253.7 [2244.4, 2297.6] | -0.04% | 2226.6 → 2250.0 ms |
+
+本次收益集中在 HDR 展示场景；PBR 有小幅回退，不能宣称所有场景均加速。20 线程、400×225、256 spp 的最终交错对照为 1672.7 [1516.0, 2005.7] → 1489.9 [1430.8, 1539.0] ms，但调查期间存在明显后台 CPU 负载，前几轮多线程结果也不稳定，因此暂不把该差值视为已确认的多线程收益。
+
+三场景在上述重复轮次中的原始 double 像素哈希和光线 / 求交计数均一致；另以 seed 2、宽 200、32 spp，在 1 / 20 线程对照这三场景及 `environment_small`，原始像素哈希和输出 PFM 的 SHA-256 均一致。Release 全量检查 **246/246**、渲染回归 **7/7** 通过，没有更新参考图。
+
+代价是每张环境图增加 `8×W×H` 字节概率表，以及约 `260×(H+1)` 字节粗索引；2048×1024 约 **16.25 MiB**，各渲染线程共享。场景加载时增加预计算工作，上述加速只针对渲染阶段。
+
+可在两个版本分别使用 `--bench --scene readme_showcase --width 400 --spp 32 --seed 1 --threads-list 1,1,1,1 --repeat 1` 复查单线程耗时：第一行作预热，其余行取中位数；比较时应保持相同 CPU 亲和性并交错运行。内置 `--repeat` 输出最快值，与上面的中位数口径不同。
 
 ### Native SAH 对照（2026-10-02）
 

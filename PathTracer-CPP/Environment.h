@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -10,12 +12,56 @@
 #include "My_Common.h"
 #include "rtw_stb_image.h"
 
+namespace environment_detail
+{
+	// Coarse inverse-CDF brackets accelerate binary search without changing its answer.
+	// CDF values, accumulation order and random-number consumption stay unchanged.
+	class CdfSearchGuide
+	{
+	public:
+		static constexpr int kBins = 64;
+
+		void build(const std::vector<double>& cdf)
+		{
+			for (int k = 0; k <= kBins; ++k)
+				first[k] = static_cast<int>(std::lower_bound(cdf.begin(), cdf.end(),
+					static_cast<double>(k) / kBins) - cdf.begin());
+		}
+
+		// u is a uniform variate in [0, 1]. Return the full-CDF index, including size()
+		// when no entry matches, just as lower_bound does. The caller retains its clamp.
+		int lower_bound(const std::vector<double>& cdf, double u) const
+		{
+			const int bin = std::clamp(static_cast<int>(u * kBins), 0, kBins - 1);
+			const int end = std::min(first[bin + 1] + 1, static_cast<int>(cdf.size()));
+			const auto it = std::lower_bound(cdf.begin() + first[bin], cdf.begin() + end, u);
+			return static_cast<int>(it - cdf.begin());
+		}
+
+	private:
+		std::array<int, kBins + 1> first{};
+	};
+}
+
 class Environment
 {
 public:
+	// Stack-local cache for a PDF/radiance pair. It owns no data and is never shared
+	// by render threads. Lat-long lookups reuse UVs only for the same normalized direction.
+	struct LookupCache
+	{
+		const Environment* owner = nullptr;
+		// Payload is read only after owner matches. Avoid zeroing unused UV/direction
+		// storage at every path vertex, particularly in scenes with no environment.
+		std::array<double, 3> direction;
+		double u, v;
+	};
+
 	virtual ~Environment() = default;
 	virtual Color radiance(const Vector3& dir) const = 0;
 	virtual double pdf_value(const Vector3& dir) const = 0;
+	virtual Color radiance(const Vector3& dir, LookupCache& cache) const { return radiance(dir); }
+	virtual double pdf_value(const Vector3& dir, LookupCache& cache) const { return pdf_value(dir); }
 	virtual Vector3 random() const = 0;
 	// Integral of luminance(L(w)) over the full sphere of directions. Resolution independent;
 	// used by LightSampler to compare the environment with geometry lights (same units).
@@ -60,22 +106,43 @@ public:
 
 	Color radiance(const Vector3& dir) const override
 	{
+		return radiance_impl(dir, nullptr);
+	}
+
+	Color radiance(const Vector3& dir, LookupCache& cache) const override
+	{
+		return radiance_impl(dir, &cache);
+	}
+
+	double pdf_value(const Vector3& dir) const override
+	{
+		return pdf_impl(dir, nullptr);
+	}
+
+	double pdf_value(const Vector3& dir, LookupCache& cache) const override
+	{
+		return pdf_impl(dir, &cache);
+	}
+
+private:
+	Color radiance_impl(const Vector3& dir, LookupCache* cache) const
+	{
 		// Convert ray direction to HDR texture lookup.
 		if (!image.is_valid())
 			return Color(1.0, 0.0, 1.0);
 
-		const auto [u, v] = direction_to_uv(dir);
+		const auto [u, v] = direction_to_uv(dir, cache);
 		return sample_bilinear(u, v) * intensity;
 	}
 
-	double pdf_value(const Vector3& dir) const override
+	double pdf_impl(const Vector3& dir, LookupCache* cache) const
 	{
 		// Degrade to uniform sampling if the environment map is invalid or has no contribution
 		if (!image.is_valid() || width <= 0 || height <= 0 || total_weight <= 0.0)
 			return 1.0 / (4.0 * pi);
 
 		const Vector3 d = normalize(dir);
-		auto [u, v] = direction_to_uv(d);
+		auto [u, v] = direction_to_uv(d, cache);
 
 		int x = static_cast<int>(u * width);
 		int y = static_cast<int>(v * height);
@@ -99,6 +166,7 @@ public:
 		return pdf_omega;
 	}
 
+public:
 	Vector3 random() const override
 	{
 		if (!image.is_valid() || width <= 0 || height <= 0 || total_weight <= 0.0)
@@ -135,7 +203,12 @@ private:
 	int height = 0;
 	std::vector<double> marginal_cdf;                  // marginal_cdf[y]: CDF for y column selection
 	std::vector<std::vector<double>> conditional_cdf;  // conditional_cdf[y][x]: CDF for x column selection given y row
+	environment_detail::CdfSearchGuide marginal_guide;
+	std::vector<environment_detail::CdfSearchGuide> conditional_guides;
 	std::vector<double> row_integrals;                 // row_integrals[y]: Integral of the y row (sum of luminance values in the row)
+	// Immutable texel PMF, shared by every render thread. Avoid decoding the image and
+	// recomputing luminance / row sin(theta) for every light-mixture PDF query.
+	std::vector<double> texel_probabilities;
 	double total_weight = 0.0;                         // total_weight: Integral of the entire environment map (sum of all row integrals)
 
 	static double srgb_to_linear(double x)
@@ -158,9 +231,15 @@ private:
 
 	// Convert a 3D direction vector to 2D UV coordinates for sampling the lat-long environment map
 	// Formula: u = (phi + pi + rotation) / (2 * pi), v = theta / pi
-	std::pair<double, double> direction_to_uv(const Vector3& dir) const
+	std::pair<double, double> direction_to_uv(const Vector3& dir, LookupCache* cache) const
 	{
 		const Vector3 d = normalize(dir);
+		// PDF historically normalizes twice, radiance once. Do not approximate equality:
+		// even a tiny change can select a different texel at a boundary. Signed zero also
+		// matters for atan2 at the longitude seam.
+		if (cache && cache->owner == this
+			&& std::memcmp(d.e.data(), cache->direction.data(), 3 * sizeof(double)) == 0)
+			return { cache->u, cache->v };
 
 		double phi = std::atan2(d.z(), d.x());
 		double theta = std::acos(std::clamp(d.y(), -1.0, 1.0));
@@ -172,6 +251,13 @@ private:
 		if (u < 0.0)
 			u += 1.0;
 		v = std::clamp(v, 0.0, 1.0);
+		if (cache)
+		{
+			cache->owner = this;
+			cache->direction = d.e;
+			cache->u = u;
+			cache->v = v;
+		}
 
 		return { u, v };
 	}
@@ -231,6 +317,8 @@ private:
 		row_integrals.assign(height, 0.0);
 		marginal_cdf.assign(height, 0.0);
 		conditional_cdf.assign(height, std::vector<double>(width, 0.0));
+		conditional_guides.resize(height);
+		texel_probabilities.assign(static_cast<size_t>(width) * height, 0.0);
 		total_weight = 0.0;
 
 		if (!image.is_valid() || width <= 0 || height <= 0)
@@ -243,7 +331,9 @@ private:
 			for (int x = 0; x < width; x++)
 			{
 				// The weight of each texel
-				row_sum += texel_weight(x, y);
+				const double weight = texel_weight(x, y);
+				texel_probabilities[static_cast<size_t>(y) * width + x] = weight;
+				row_sum += weight;
 				conditional_cdf[y][x] = row_sum; // CDF for x selection in row y
 			}
 
@@ -261,6 +351,7 @@ private:
 				for (int x = 0; x < width; x++)
 					conditional_cdf[y][x] = static_cast<double>(x + 1) / static_cast<double>(width);
 			}
+			conditional_guides[y].build(conditional_cdf[y]);
 		}
 
 		// Compute the marginal CDF for row selection
@@ -273,6 +364,9 @@ private:
 
 		if (total_weight > 0.0)
 		{
+			// Preserve the original weight / total calculation and CDF accumulation order.
+			for (double& probability : texel_probabilities)
+				probability /= total_weight;
 			for (int y = 0; y < height; y++)
 				marginal_cdf[y] /= total_weight; // Normalize to get the CDF
 		}
@@ -282,6 +376,7 @@ private:
 			for (int y = 0; y < height; y++)
 				marginal_cdf[y] = static_cast<double>(y + 1) / static_cast<double>(height);
 		}
+		marginal_guide.build(marginal_cdf);
 	}
 
 	// Sample pixel indices (x, y) based on the precomputed sampling distribution
@@ -292,16 +387,12 @@ private:
 
 		// Choose a random row based on uniform random number
 		const double u_row = random_double();
-		// Use binary search to find the row index corresponding to u_row in the marginal CDF
-		const auto row_it = std::lower_bound(marginal_cdf.begin(), marginal_cdf.end(), u_row);
-		// Compute the row index (y) from the iterator
-		int y = static_cast<int>(std::distance(marginal_cdf.begin(), row_it));
+		int y = marginal_guide.lower_bound(marginal_cdf, u_row);
 		y = std::clamp(y, 0, height - 1);
 
 		const double u_col = random_double();
 		const auto& row_cdf = conditional_cdf[y];
-		const auto col_it = std::lower_bound(row_cdf.begin(), row_cdf.end(), u_col);
-		int x = static_cast<int>(std::distance(row_cdf.begin(), col_it));
+		int x = conditional_guides[y].lower_bound(row_cdf, u_col);
 		x = std::clamp(x, 0, width - 1);
 
 		return { x, y };
@@ -329,6 +420,6 @@ private:
 	{
 		if (total_weight <= 0.0)
 			return 0.0;
-		return texel_weight(x, y) / total_weight;
+		return texel_probabilities[static_cast<size_t>(y) * width + x];
 	}
 };

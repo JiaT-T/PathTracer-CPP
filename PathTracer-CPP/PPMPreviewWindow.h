@@ -18,26 +18,78 @@
 #include <thread>
 #include <vector>
 
-class PPMPreviewWindow
+#include "ImageIO.h"
+#include "RenderPreview.h"
+
+class PPMPreviewWindow : public RenderPreview
 {
 public:
-	PPMPreviewWindow(const std::string& title, int width, int height)
+	PPMPreviewWindow(const std::string& title, int width, int height,
+		const DisplaySettings& settings = {}, bool denoised_preview = true)
 		: state(std::make_shared<SharedState>())
 	{
-		state->width = width;
-		state->height = height;
+		state->width = std::max(1, width);
+		state->height = std::max(1, height);
 		state->title = widen(title);
-		state->dib_pixels.assign(static_cast<size_t>(width) * height * 4, 0);
-		state->info_text = build_rendering_text(0.0, 0, width, height);
+		state->save_filename = image_io::replace_extension(image_io::add_suffix(title, "_preview"), ".ppm");
+		state->display_settings = normalize_display_settings(settings);
+		state->denoised_preview = denoised_preview;
+		state->dib_pixels.assign(static_cast<size_t>(state->width) * state->height * 4, 64);
+		rebuild_display(*state);
 
 		ui_thread = std::thread(&PPMPreviewWindow::ui_thread_main, state);
 	}
 
-	~PPMPreviewWindow()
+	~PPMPreviewWindow() override
 	{
 		close_window();
 		if (ui_thread.joinable())
 			ui_thread.join();
+	}
+
+	void Update(const ProgressivePreviewFrame& frame) override
+	{
+		HWND hwnd = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (state->closed || state->close_requested)
+				return;
+			const size_t pixel_count = static_cast<size_t>(state->width) * state->height;
+			if (frame.raw.size() != pixel_count)
+				return;
+			if (frame.completed_samples < state->completed_samples)
+			{
+				state->denoised.clear();
+				state->denoised_samples = 0;
+			}
+			state->raw = frame.raw;
+			if (frame.denoised.size() == pixel_count)
+			{
+				state->denoised = frame.denoised;
+				state->denoised_samples = frame.completed_samples;
+			}
+			else if (frame.final)
+			{
+				// A final raw-only frame must not leave an older filtered preview selected.
+				state->denoised.clear();
+				state->denoised_samples = 0;
+			}
+			state->completed_samples = frame.completed_samples;
+			state->total_samples = frame.total_samples;
+			state->elapsed_seconds = frame.elapsed_seconds;
+			state->finished = frame.final;
+			state->has_linear_frame = true;
+			state->display_dirty = true;
+			hwnd = state->hwnd;
+		}
+		if (hwnd)
+			PostMessageW(hwnd, kRefreshMessage, 0, 0);
+	}
+
+	DisplaySettings GetDisplaySettings() const override
+	{
+		std::lock_guard<std::mutex> lock(state->mutex);
+		return state->display_settings;
 	}
 
 	void UpdateImage(const std::vector<unsigned char>& dib_pixels, int completed_rows, double elapsed_seconds)
@@ -48,6 +100,12 @@ public:
 			if (state->closed)
 				return;
 
+			if (dib_pixels.size() != static_cast<size_t>(state->width) * state->height * 4)
+				return;
+			state->has_linear_frame = false;
+			state->display_dirty = false;
+			state->raw.clear();
+			state->denoised.clear();
 			state->dib_pixels = dib_pixels;
 			state->info_text = build_rendering_text(elapsed_seconds, completed_rows, state->width, state->height);
 			hwnd = state->hwnd;
@@ -69,6 +127,12 @@ public:
 			if (state->closed)
 				return;
 
+			if (dib_pixels.size() != static_cast<size_t>(state->width) * state->height * 4)
+				return;
+			state->has_linear_frame = false;
+			state->display_dirty = false;
+			state->raw.clear();
+			state->denoised.clear();
 			state->dib_pixels = dib_pixels;
 			state->info_text = build_progressive_rendering_text(
 				elapsed_seconds,
@@ -91,7 +155,12 @@ public:
 			if (state->closed)
 				return;
 
-			state->info_text = build_finished_text(render_seconds);
+			state->finished = true;
+			state->elapsed_seconds = render_seconds;
+			if (state->has_linear_frame)
+				state->info_text = build_display_text(*state);
+			else
+				state->info_text = build_finished_text(render_seconds);
 			hwnd = state->hwnd;
 		}
 
@@ -105,7 +174,7 @@ public:
 		state->cv.wait(lock, [this] { return state->closed; });
 	}
 
-	bool IsClosed() const
+	bool IsClosed() const override
 	{
 		std::lock_guard<std::mutex> lock(state->mutex);
 		return state->closed;
@@ -119,8 +188,22 @@ private:
 		std::wstring title;
 		std::wstring info_text;
 		std::vector<unsigned char> dib_pixels;
+		std::vector<Color> raw;
+		std::vector<Color> denoised;
+		DisplaySettings display_settings;
+		std::string save_filename;
+		std::wstring save_status;
+		int completed_samples = 0;
+		int total_samples = 0;
+		int denoised_samples = 0;
+		double elapsed_seconds = 0.0;
+		bool has_linear_frame = false;
+		bool display_dirty = false;
+		bool denoised_preview = true;
+		bool finished = false;
 		HWND hwnd = nullptr;
 		bool closed = false;
+		bool close_requested = false;
 		std::mutex mutex;
 		std::condition_variable cv;
 	};
@@ -136,7 +219,7 @@ private:
 		POINT last_mouse{};
 	};
 
-	static constexpr int kHeaderHeight = 56;
+	static constexpr int kHeaderHeight = 104;
 	static constexpr int kOuterMargin = 16;
 	static constexpr UINT kRefreshMessage = WM_APP + 1;
 
@@ -155,14 +238,137 @@ private:
 			if (required_size <= 0)
 				return std::wstring(text.begin(), text.end());
 
-			std::wstring wide(required_size - 1, L'\0');
+			std::wstring wide(required_size, L'\0');
 			MultiByteToWideChar(CP_ACP, 0, text.c_str(), -1, wide.data(), required_size);
+			wide.pop_back();
 			return wide;
 		}
 
-		std::wstring wide(required_size - 1, L'\0');
+		std::wstring wide(required_size, L'\0');
 		MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), required_size);
+		wide.pop_back();
 		return wide;
+	}
+
+	static const std::vector<Color>& selected_frame(const SharedState& state)
+	{
+		return state.denoised_preview && !state.denoised.empty() ? state.denoised : state.raw;
+	}
+
+	static std::wstring build_display_text(const SharedState& state)
+	{
+		const bool filtered = state.denoised_preview && !state.denoised.empty();
+		std::wostringstream stream;
+		stream << std::fixed << std::setprecision(2)
+			<< (state.finished ? L"Finished: " : L"Elapsed: ") << state.elapsed_seconds << L" s"
+			<< L"    Render: " << state.completed_samples << L" / " << state.total_samples << L" spp"
+			<< L"    " << state.width << L" x " << state.height << L'\n';
+		stream << std::setprecision(1) << L"Exposure: " << state.display_settings.exposure_ev << L" EV"
+			<< L"    " << (state.display_settings.tone_mapping == ToneMapping::AgX ? L"AgX" : L"Reinhard")
+			<< L"    Preview: " << (filtered ? L"Denoised" : L"Raw")
+			<< L" (" << (filtered ? state.denoised_samples : state.completed_samples) << L" spp)";
+		if (state.denoised_preview && !filtered && !state.finished)
+			stream << L" - waiting for denoise";
+		stream << L"\n[+/-] EV  [0] reset EV  [T] tone map  [D] raw/denoised  [S] save preview";
+		stream << L"\n" << (state.save_status.empty() ? L"Mouse wheel: zoom    Left drag: pan    Right double-click: fit" : state.save_status);
+		return stream.str();
+	}
+
+	// Called on the UI thread, with the state lock held once rendering has started.
+	// Linear snapshots remain untouched so controls never change accumulation or filtering.
+	static void rebuild_display(SharedState& state)
+	{
+		const auto& pixels = selected_frame(state);
+		if (!pixels.empty() && state.completed_samples > 0)
+		{
+			for (size_t i = 0; i < pixels.size(); ++i)
+			{
+				const Color_Bytes color = to_color_bytes(pixels[i], state.display_settings);
+				state.dib_pixels[i * 4] = color.b;
+				state.dib_pixels[i * 4 + 1] = color.g;
+				state.dib_pixels[i * 4 + 2] = color.r;
+				state.dib_pixels[i * 4 + 3] = 255;
+			}
+		}
+		else if (state.has_linear_frame)
+		{
+			std::fill(state.dib_pixels.begin(), state.dib_pixels.end(), static_cast<unsigned char>(64));
+		}
+		state.info_text = build_display_text(state);
+		state.display_dirty = false;
+	}
+
+	static void save_preview(HWND hwnd, SharedState& state)
+	{
+		std::vector<Color> pixels;
+		DisplaySettings settings;
+		std::string filename;
+		int width = 0;
+		int height = 0;
+		{
+			std::lock_guard<std::mutex> lock(state.mutex);
+			if (!state.has_linear_frame || state.completed_samples <= 0)
+			{
+				state.save_status = L"No rendered frame to save yet.";
+				state.info_text = build_display_text(state);
+				InvalidateRect(hwnd, nullptr, FALSE);
+				return;
+			}
+			pixels = selected_frame(state);
+			settings = state.display_settings;
+			filename = state.save_filename;
+			width = state.width;
+			height = state.height;
+		}
+		const bool saved = image_io::write_ppm(filename, pixels, width, height, settings);
+		{
+			std::lock_guard<std::mutex> lock(state.mutex);
+			const size_t slash = filename.find_last_of("/\\");
+			state.save_status = (saved ? L"Saved: " : L"Save failed: ")
+				+ widen(slash == std::string::npos ? filename : filename.substr(slash + 1));
+			state.info_text = build_display_text(state);
+		}
+		InvalidateRect(hwnd, nullptr, FALSE);
+	}
+
+	static bool handle_key(HWND hwnd, SharedState& state, WPARAM key, bool repeated)
+	{
+		if (key == 'S')
+		{
+			if (!repeated)
+				save_preview(hwnd, state);
+			return true;
+		}
+		std::lock_guard<std::mutex> lock(state.mutex);
+		switch (key)
+		{
+		case VK_ADD:
+		case VK_OEM_PLUS:
+			state.display_settings.exposure_ev = std::min(kMaxExposureEV, state.display_settings.exposure_ev + 0.5);
+			break;
+		case VK_SUBTRACT:
+		case VK_OEM_MINUS:
+			state.display_settings.exposure_ev = std::max(kMinExposureEV, state.display_settings.exposure_ev - 0.5);
+			break;
+		case '0':
+		case VK_NUMPAD0:
+			state.display_settings.exposure_ev = 0.0;
+			break;
+		case 'T':
+			if (!repeated)
+				state.display_settings.tone_mapping = state.display_settings.tone_mapping == ToneMapping::Reinhard
+					? ToneMapping::AgX : ToneMapping::Reinhard;
+			break;
+		case 'D':
+			if (!repeated)
+				state.denoised_preview = !state.denoised_preview;
+			break;
+		default:
+			return false;
+		}
+		rebuild_display(state);
+		InvalidateRect(hwnd, nullptr, FALSE);
+		return true;
 	}
 
 	std::wstring build_finished_text(double render_seconds) const
@@ -206,6 +412,7 @@ private:
 		HWND hwnd = nullptr;
 		{
 			std::lock_guard<std::mutex> lock(state->mutex);
+			state->close_requested = true;
 			hwnd = state->hwnd;
 		}
 
@@ -215,10 +422,20 @@ private:
 
 	static void ui_thread_main(std::shared_ptr<SharedState> state)
 	{
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (state->close_requested)
+			{
+				state->closed = true;
+				state->cv.notify_all();
+				return;
+			}
+		}
 		const wchar_t* class_name = L"PathTracerLivePPMPreviewWindow";
 		HINSTANCE instance = GetModuleHandleW(nullptr);
 
 		WNDCLASSW window_class{};
+		window_class.style = CS_DBLCLKS;
 		window_class.lpfnWndProc = &PPMPreviewWindow::window_proc;
 		window_class.hInstance = instance;
 		window_class.lpszClassName = class_name;
@@ -254,7 +471,7 @@ private:
 			0,
 			class_name,
 			state->title.c_str(),
-			WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+			WS_OVERLAPPEDWINDOW,
 			CW_USEDEFAULT,
 			CW_USEDEFAULT,
 			window_rect.right - window_rect.left,
@@ -272,6 +489,18 @@ private:
 			return;
 		}
 
+		bool close_requested = false;
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			close_requested = state->close_requested;
+			if (state->display_dirty)
+				rebuild_display(*state);
+		}
+		if (close_requested)
+		{
+			DestroyWindow(hwnd);
+			return;
+		}
 		ShowWindow(hwnd, SW_SHOW);
 		UpdateWindow(hwnd);
 
@@ -281,6 +510,8 @@ private:
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
+		if (IsWindow(hwnd))
+			DestroyWindow(hwnd);
 	}
 
 	static LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param)
@@ -317,8 +548,26 @@ private:
 		case WM_ERASEBKGND:
 			return 1;
 		case kRefreshMessage:
+		{
+			std::lock_guard<std::mutex> lock(context.state->mutex);
+			if (context.state->display_dirty)
+				rebuild_display(*context.state);
 			InvalidateRect(hwnd, nullptr, FALSE);
 			return 0;
+		}
+		case WM_KEYDOWN:
+			if (handle_key(hwnd, *context.state, w_param, (l_param & (1LL << 30)) != 0))
+				return 0;
+			return DefWindowProcW(hwnd, message, w_param, l_param);
+		case WM_SIZE:
+			InvalidateRect(hwnd, nullptr, FALSE);
+			return 0;
+		case WM_GETMINMAXINFO:
+		{
+			auto* limits = reinterpret_cast<MINMAXINFO*>(l_param);
+			limits->ptMinTrackSize = POINT{ 720, 320 };
+			return 0;
+		}
 		case WM_MOUSEWHEEL:
 			handle_mouse_wheel(hwnd, context, GET_WHEEL_DELTA_WPARAM(w_param), GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param));
 			return 0;
@@ -430,9 +679,11 @@ private:
 		}
 
 		RECT header_rect{ kOuterMargin, kOuterMargin / 2, client_rect.right - kOuterMargin, kHeaderHeight };
+		HGDIOBJ old_font = SelectObject(memory_dc, GetStockObject(DEFAULT_GUI_FONT));
 		SetBkMode(memory_dc, TRANSPARENT);
 		SetTextColor(memory_dc, RGB(32, 32, 32));
-		DrawTextW(memory_dc, info_text.c_str(), -1, &header_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+		DrawTextW(memory_dc, info_text.c_str(), -1, &header_rect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+		SelectObject(memory_dc, old_font);
 
 		const int available_width = std::max(1, client_width - 2 * kOuterMargin);
 		const int available_height = std::max(1, client_height - kHeaderHeight - kOuterMargin);
@@ -449,6 +700,8 @@ private:
 		const int draw_x = centered_x + static_cast<int>(std::round(context.pan_x));
 		const int draw_y = centered_y + static_cast<int>(std::round(context.pan_y));
 
+		const int saved_dc = SaveDC(memory_dc);
+		IntersectClipRect(memory_dc, 0, kHeaderHeight, client_width, client_height);
 		RECT image_border{ draw_x - 1, draw_y - 1, draw_x + draw_width + 1, draw_y + draw_height + 1 };
 		FrameRect(memory_dc, &image_border, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 
@@ -470,6 +723,7 @@ private:
 				DIB_RGB_COLORS,
 				SRCCOPY);
 		}
+		RestoreDC(memory_dc, saved_dc);
 
 		BitBlt(hdc, 0, 0, client_width, client_height, memory_dc, 0, 0, SRCCOPY);
 		SelectObject(memory_dc, old_bitmap);

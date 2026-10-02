@@ -4,11 +4,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -33,6 +35,7 @@
 #include "Hittable_List.h"
 #include "Integrator.h"
 #include "RenderAOV.h"
+#include "RenderPreview.h"
 #include "Stats.h"
 
 // ============================================================================================
@@ -579,6 +582,255 @@ namespace
 		check(p > 0.01, "LatLong_Environment sample/pdf chi2", "chi2=" + fmt(chi2, 1) + " dof=" + std::to_string(cells - 1) + " p=" + fmt(p, 3));
 	}
 
+	void test_environment_cdf_guide()
+	{
+		std::cout << "\n[pdf] guided CDF lookup equivalence\n";
+		using Cdf = std::vector<double>;
+		std::vector<std::pair<std::string, Cdf>> cases = {
+			{ "empty", {} }, { "single zero", { 0.0 } }, { "single one", { 1.0 } },
+			{ "single fractional value", { 0.35 } },
+			{ "all-zero plateau", Cdf(2048, 0.0) }, { "all-one plateau", Cdf(2048, 1.0) }
+		};
+		for (int size : { 7, 64, 2048 })
+		{
+			Cdf uniform(size);
+			for (int i = 0; i < size; ++i) uniform[i] = static_cast<double>(i + 1) / size;
+			cases.emplace_back("uniform size " + std::to_string(size), std::move(uniform));
+		}
+		Cdf jump(2048, 0.0), plateaus(2048), rounded_tail(2048);
+		for (int i = 0; i < 2048; ++i)
+		{
+			if (i >= 1301) jump[i] = 1.0;
+			plateaus[i] = static_cast<double>(i / 128) / 16.0;
+			rounded_tail[i] = static_cast<double>(i + 1) / 2048 * std::nextafter(1.0, 0.0);
+		}
+		plateaus.back() = 1.0;
+		cases.emplace_back("single jump after long zero plateau", std::move(jump));
+		cases.emplace_back("repeated plateaus on guide boundaries", std::move(plateaus));
+		cases.emplace_back("CDF ending just below one", std::move(rounded_tail));
+		cases.emplace_back("empty after rebuilding a populated guide", Cdf{});
+
+		environment_detail::CdfSearchGuide guide;
+		for (const auto& [name, cdf] : cases)
+		{
+			guide.build(cdf);
+			// PCG32 produces u32 / 2^32; include its maximum as well as double's neighbor of 1.
+			Cdf queries = { 0.0, 1.0, 4294967295.0 / 4294967296.0, std::nextafter(1.0, 0.0) };
+			auto add_neighbors = [&](double value)
+			{
+				for (double u : { std::nextafter(value, -infinity), value, std::nextafter(value, infinity) })
+					if (u >= 0.0 && u <= 1.0) queries.push_back(u);
+			};
+			for (double value : cdf) add_neighbors(value);
+			for (int bin = 0; bin <= environment_detail::CdfSearchGuide::kBins; ++bin)
+				add_neighbors(static_cast<double>(bin) / environment_detail::CdfSearchGuide::kBins);
+			rng::PCG32 generator;
+			generator.seed(1202, 64);
+			for (int i = 0; i < 256; ++i) queries.push_back(generator.next_double());
+			std::sort(queries.begin(), queries.end());
+			queries.erase(std::unique(queries.begin(), queries.end()), queries.end());
+			int mismatches = 0;
+			std::string first_mismatch;
+			for (double u : queries)
+			{
+				const int expected = static_cast<int>(std::lower_bound(cdf.begin(), cdf.end(), u) - cdf.begin());
+				const int actual = guide.lower_bound(cdf, u);
+				if (actual != expected && mismatches++ == 0)
+					first_mismatch = " first u=" + fmt(u, 17) + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual);
+			}
+			check(mismatches == 0, "CDF guide matches full lower_bound: " + name,
+				"queries=" + std::to_string(queries.size()) + " mismatches=" + std::to_string(mismatches) + first_mismatch);
+		}
+	}
+
+	void test_environment_boundaries()
+	{
+		std::cout << "\n[pdf] small environment maps and distribution boundaries\n";
+		constexpr int W = 4, H = 4;
+		// Unequal RGB values exercise luminance and sRGB decoding; the second row is black.
+		const std::vector<unsigned char> pixels = {
+			128,64,16, 10,20,30, 255,0,0, 0,0,255,
+			0,0,0, 0,0,0, 0,0,0, 0,0,0,
+			0,0,0, 0,192,0, 0,0,0, 0,0,0,
+			32,32,32, 255,255,255, 64,128,192, 0,0,0
+		};
+		std::filesystem::create_directories("output");
+		auto write_map = [&](const std::string& path, const std::vector<unsigned char>& bytes)
+		{
+			std::ofstream out(path, std::ios::binary);
+			out << "P6\n" << W << " " << H << "\n255\n";
+			out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+			return out.good();
+		};
+		auto direction = [](double u, double v, double rotation = 0.0)
+		{
+			const double phi = 2.0 * pi * u - pi - rotation;
+			const double theta = pi * v;
+			return Vector3(std::cos(phi) * std::sin(theta), std::cos(theta), std::sin(phi) * std::sin(theta));
+		};
+		auto close = [](double actual, double expected)
+		{
+			// P6 is loaded into float channels; the reference uses exact byte / 255 doubles.
+			return std::isfinite(actual) && std::abs(actual - expected) <= 2e-6 * std::max(1.0, std::abs(expected));
+		};
+		auto cached_matches = [](const Environment& env, const Vector3& d, Environment::LookupCache& cache, bool pdf_first)
+		{
+			const double expected_pdf = env.pdf_value(d);
+			const Color expected_radiance = env.radiance(d);
+			double actual_pdf;
+			Color actual_radiance;
+			if (pdf_first)
+			{
+				actual_pdf = env.pdf_value(d, cache);
+				actual_radiance = env.radiance(d, cache);
+			}
+			else
+			{
+				actual_radiance = env.radiance(d, cache);
+				actual_pdf = env.pdf_value(d, cache);
+			}
+			return std::memcmp(&actual_pdf, &expected_pdf, sizeof(double)) == 0
+				&& std::memcmp(actual_radiance.e.data(), expected_radiance.e.data(), 3 * sizeof(double)) == 0;
+		};
+		const std::string path = "output/__test_env_distribution.ppm";
+		if (!check(write_map(path, pixels), "write small environment test map")) return;
+		for (bool srgb : { false, true })
+		{
+			const std::string label = srgb ? "sRGB" : "linear";
+			const LatLong_Environment env(path, 1.0, 0.0, srgb);
+			const LatLong_Environment scaled(path, 3.5, 0.0, srgb);
+			const LatLong_Environment dark(path, 0.0, 0.0, srgb);
+			constexpr double rotation = 7.1; // Also exercises wrapping by more than one turn.
+			const LatLong_Environment rotated(path, 1.0, rotation, srgb);
+			std::vector<double> weights(W * H, 0.0);
+			double total = 0.0;
+			for (int i = 0; i < W * H; ++i)
+			{
+				double c[3];
+				for (int k = 0; k < 3; ++k)
+				{
+					const double encoded = pixels[3 * i + k] / 255.0;
+					c[k] = !srgb ? encoded : encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4);
+				}
+				weights[i] = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) * std::sin(pi * (i / W + 0.5) / H);
+				total += weights[i];
+			}
+			auto reference_pdf = [&](double u, double v)
+			{
+				const int x = std::clamp(static_cast<int>(u * W), 0, W - 1);
+				const int y = std::clamp(static_cast<int>(v * H), 0, H - 1);
+				return weights[y * W + x] / total * (W * H) / (2.0 * pi * pi * std::max(std::sin(pi * v), 1e-6));
+			};
+			bool analytic = true, nonunit = true, rotation_ok = true, intensity_ok = true;
+			for (int y = 0; y < H; ++y)
+				for (int x = 0; x < W; ++x)
+				{
+					const double u = (x + 0.5) / W, v = (y + 0.5) / H;
+					const Vector3 d = direction(u, v);
+					const double p = env.pdf_value(d);
+					analytic &= close(p, reference_pdf(u, v));
+					nonunit &= close(env.pdf_value(d * 0.125), p) && close(env.pdf_value(d * 7.0), p);
+					rotation_ok &= close(rotated.pdf_value(direction(u, v, rotation)), reference_pdf(u, v));
+					intensity_ok &= scaled.pdf_value(d) == p && dark.pdf_value(d) == p;
+					intensity_ok &= (scaled.radiance(d) - env.radiance(d) * 3.5).length_squared() < 1e-24
+						&& dark.radiance(d).length_squared() == 0.0;
+				}
+			check(analytic, label + " texel PDFs match analytic luminance weights, including black rows");
+			check(nonunit, label + " PDF is invariant to non-unit direction length");
+			check(rotation_ok, label + " rotated PDF matches analytic texel weights");
+			check(intensity_ok, label + " intensity scales radiance but leaves the PDF unchanged (including zero)");
+			check(close(env.integrated_luminance(), total * 2.0 * pi * pi / (W * H))
+				&& close(scaled.integrated_luminance(), 3.5 * env.integrated_luminance())
+				&& dark.integrated_luminance() == 0.0, label + " integrated luminance matches analytic weights and intensity");
+			bool boundaries = true;
+			// The seam is allowed to be discontinuous: check the distinct first/last texels.
+			for (double u : { 1e-7, 1.0 - 1e-7 })
+				boundaries &= close(env.pdf_value(direction(u, 0.125)), reference_pdf(u, 0.125));
+			boundaries &= close(env.pdf_value(Vector3(-1, 2, 0.0)), reference_pdf(0.0, std::acos(2.0 / std::sqrt(5.0)) / pi));
+			// atan2(0, 0) selects u = 0.5 at exact poles; the Jacobian clamp keeps PDFs finite.
+			boundaries &= close(env.pdf_value(Vector3(0, 1, 0)), reference_pdf(0.5, 0.0));
+			boundaries &= close(env.pdf_value(Vector3(0, -1, 0)), reference_pdf(0.5, 1.0));
+			check(boundaries, label + " seam and pole PDFs are finite and match the analytic boundary convention");
+
+			Environment::LookupCache forward_cache, reverse_cache, shared_cache;
+			bool forward = true, reverse = true, switched = true;
+			for (const Vector3& d : {
+				Vector3(1, 0, 0), Vector3(1, 2, 3), Vector3(0.125, -0.875, 0.001),
+				Vector3(-1, 0, +0.0), Vector3(-1, 0, -0.0),
+				Vector3(0, 1, 0), Vector3(-0.0, 1, -0.0), Vector3(0, -1, 0),
+				direction(1e-7, 0.125) * 7.0, direction(1.0 - 1e-7, 0.125) * 0.125 })
+			{
+				// Retain caches across direction changes; repeated calls also exercise warm hits.
+				for (int repeat = 0; repeat < 2; ++repeat)
+				{
+					forward &= cached_matches(env, d, forward_cache, true);
+					reverse &= cached_matches(env, d, reverse_cache, false);
+					for (const Environment* other : { &env, &rotated, &scaled, &env })
+						switched &= cached_matches(*other, d, shared_cache, repeat == 0);
+				}
+			}
+			check(forward, label + " cached PDF then radiance is bit-identical across direction changes, signed zero and non-unit inputs");
+			check(reverse, label + " cached radiance then PDF is bit-identical across direction changes, signed zero and non-unit inputs");
+			check(switched, label + " shared lookup cache remains bit-identical when switching rotation and environment owner");
+		}
+		std::filesystem::remove(path);
+
+		std::vector<unsigned char> sparse(W * H * 3, 0);
+		constexpr int bright_x = 1, bright_y = 2;
+		sparse[3 * (bright_y * W + bright_x)] = 255;
+		const std::string sparse_path = "output/__test_env_single_texel.ppm";
+		if (!check(write_map(sparse_path, sparse), "write single-texel environment test map")) return;
+		const LatLong_Environment single(sparse_path);
+		std::filesystem::remove(sparse_path);
+		bool support = true;
+		for (int y = 0; y < H; ++y)
+			for (int x = 0; x < W; ++x)
+			{
+				const double v = (y + 0.5) / H;
+				const double expected = x == bright_x && y == bright_y ? (W * H) / (2.0 * pi * pi * std::sin(pi * v)) : 0.0;
+				support &= close(single.pdf_value(direction((x + 0.5) / W, v)), expected);
+			}
+		check(support, "single bright texel has unit probability mass and black texels have zero PDF");
+		rng::seed_thread(1201);
+		bool selected = true;
+		for (int i = 0; i < 128; ++i)
+		{
+			const Vector3 d = single.random();
+			const double u = (std::atan2(d.z(), d.x()) + pi) / (2.0 * pi);
+			const double v = std::acos(std::clamp(d.y(), -1.0, 1.0)) / pi;
+			selected &= u >= 0.25 && u < 0.5 && v >= 0.5 && v < 0.75 && single.pdf_value(d) > 0.0;
+		}
+		check(selected, "single bright texel sampled directions stay in the bright texel");
+
+		const std::string black_path = "output/__test_env_black.ppm";
+		if (!check(write_map(black_path, std::vector<unsigned char>(W * H * 3, 0)), "write black environment test map")) return;
+		const LatLong_Environment black(black_path, 3.5, 7.1, true);
+		std::filesystem::remove(black_path);
+		bool uniform = black.integrated_luminance() == 0.0, same_rng = true;
+		for (uint64_t seed = 0; seed < 32; ++seed)
+		{
+			rng::seed_thread(seed);
+			const Vector3 expected = random_unit_vector();
+			const auto expected_state = rng::thread_generator();
+			rng::seed_thread(seed);
+			const Vector3 d = black.random();
+			const auto actual_state = rng::thread_generator();
+			uniform &= black.pdf_value(d * 7.0) == 1.0 / (4.0 * pi) && black.radiance(d).length_squared() == 0.0;
+			same_rng &= (d - expected).length_squared() == 0.0 && actual_state.state == expected_state.state && actual_state.inc == expected_state.inc;
+		}
+		check(uniform, "all-black map falls back to uniform PDF with zero radiance and integrated luminance");
+		check(same_rng, "all-black map uses the uniform direction sampler and preserves its RNG consumption");
+		Environment::LookupCache fallback_cache;
+		const Constant_Environment constant(Color(0.25, 0.5, 0.75));
+		const Environment* fallback_environments[] = { &single, &black, &constant, &single };
+		bool fallback = true;
+		for (bool pdf_first : { false, true })
+			for (const Vector3& d : { Vector3(-1, 0, +0.0), Vector3(-1, 0, -0.0), Vector3(1, 2, 3) })
+				for (const Environment* other : fallback_environments)
+					fallback &= cached_matches(*other, d, fallback_cache, pdf_first);
+		check(fallback, "shared lookup cache preserves bit-identical black-map and constant-environment fallbacks");
+	}
+
 	void test_light_pdf()
 	{
 		std::cout << "\n[pdf] area light sampling (solid angle)\n";
@@ -1008,6 +1260,287 @@ namespace
 			check(variance.rel_mse < 0.5 * legacy.rel_mse, "at 2048 spp the variance-guided filter changes the image less than the legacy filter",
 				"relMSE(denoised, raw): variance=" + fmt(variance.rel_mse, 7) + " legacy=" + fmt(legacy.rel_mse, 7));
 		}
+	}
+
+	bool same_linear_pixels(const std::vector<Color>& a, const std::vector<Color>& b)
+	{
+		if (a.size() != b.size()) return false;
+		for (size_t i = 0; i < a.size(); ++i)
+			if (a[i].e != b[i].e) return false;
+		return true;
+	}
+
+	bool ppm_matches_display(const std::string& path, const std::vector<Color>& pixels, int width, int height,
+		const DisplaySettings& settings)
+	{
+		std::ifstream in(path);
+		std::string magic;
+		int file_width = 0, file_height = 0, max_value = 0;
+		in >> magic >> file_width >> file_height >> max_value;
+		if (magic != "P3" || file_width != width || file_height != height || max_value != 255) return false;
+		for (const Color& color : pixels)
+		{
+			int r = -1, g = -1, b = -1;
+			in >> r >> g >> b;
+			const auto expected = to_color_bytes(color, settings);
+			if (!in || r != expected.r || g != expected.g || b != expected.b) return false;
+		}
+		return true;
+	}
+
+	class RecordingPreview : public RenderPreview
+	{
+	public:
+		struct Frame
+		{
+			std::vector<Color> raw, denoised;
+			int samples = 0;
+			int total_samples = 0;
+			bool final = false;
+		};
+		std::vector<Frame> frames;
+		DisplaySettings settings;
+		std::function<void(const ProgressivePreviewFrame&)> on_update;
+		bool closed = false;
+		bool close_after_first_pass = false;
+		int updates_after_close = 0;
+
+		void Update(const ProgressivePreviewFrame& frame) override
+		{
+			if (closed) ++updates_after_close;
+			frames.push_back({ frame.raw, frame.denoised, frame.completed_samples, frame.total_samples, frame.final });
+			if (on_update) on_update(frame);
+			if (close_after_first_pass && frame.completed_samples > 0) closed = true;
+		}
+		bool IsClosed() const override { return closed; }
+		DisplaySettings GetDisplaySettings() const override { return settings; }
+		int intermediate_denoise_count() const
+		{
+			return static_cast<int>(std::count_if(frames.begin(), frames.end(), [](const Frame& f)
+				{ return !f.final && !f.denoised.empty(); }));
+		}
+	};
+
+	void test_postprocess()
+	{
+		std::cout << "\n[postprocess] exposure, tone mapping and progressive denoising\n";
+		const auto same_bytes = [](Color_Bytes a, Color_Bytes b)
+			{ return a.r == b.r && a.g == b.g && a.b == b.b; };
+		// Fixed legacy values pin the public 8-bit output, independently of the new pipeline.
+		const double linear_values[] = { 0.0, 0.0031308, 0.18, 0.5, 1.0, 4.0, 16.0, 1000.0 };
+		const int legacy_bytes[] = { 0, 10, 109, 156, 188, 232, 249, 255 };
+		bool compatible = true;
+		for (size_t i = 0; i < std::size(linear_values); ++i)
+		{
+			const auto b = to_color_bytes(Color(linear_values[i], linear_values[i], linear_values[i]));
+			compatible = compatible && b.r == legacy_bytes[i] && b.g == b.r && b.b == b.r;
+		}
+		check(compatible, "default EV 0 Reinhard retains legacy byte values");
+		check(same_bytes(to_color_bytes(Color(-1, infinity, std::numeric_limits<double>::quiet_NaN())), {}),
+			"invalid or negative input channels retain the default black fallback");
+
+		for (ToneMapping tone : { ToneMapping::Reinhard, ToneMapping::AgX })
+		{
+			DisplaySettings base;
+			base.tone_mapping = tone;
+			bool exposure_correct = true, finite = true;
+			for (double ev : { -4.0, -0.5, 1.0, 3.25 })
+			{
+				DisplaySettings exposed = base;
+				exposed.exposure_ev = ev;
+				const Color input(0.012, 0.18, 3.5);
+				exposure_correct = exposure_correct &&
+					(display_transform(input, exposed) - display_transform(input * std::exp2(ev), base)).length() < 1e-12;
+			}
+			for (double ev : { 0.0, -20.0, 20.0, -std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+				infinity, std::numeric_limits<double>::quiet_NaN() })
+			{
+				DisplaySettings exposed = base;
+				exposed.exposure_ev = ev;
+				for (const Color& input : { Color(-1, infinity, std::numeric_limits<double>::quiet_NaN()),
+					Color(std::numeric_limits<double>::max(), 0.18, 0.0) })
+				{
+					const Color output = display_transform(input, exposed);
+					for (int channel = 0; channel < 3; ++channel)
+						finite = finite && std::isfinite(output[channel]) && output[channel] >= 0.0 && output[channel] <= 1.0;
+				}
+			}
+			const std::string label = tone == ToneMapping::Reinhard ? "Reinhard" : "AgX";
+			check(exposure_correct, label + ": exposure is a linear radiance multiplier before tone mapping");
+			check(finite, label + ": extreme radiance and exposure produce finite bounded display values");
+		}
+		DisplaySettings agx;
+		agx.tone_mapping = ToneMapping::AgX;
+		// Independent three.js r182 GLSL reference values catch matrix transposition and
+		// accidentally applying the display transfer function twice.
+		const std::vector<Color> agx_inputs = { Color(0, 0, 0), Color(0.18, 0.18, 0.18), Color(1, 1, 1),
+			Color(1, 0, 0), Color(0, 1, 0), Color(0, 0, 1), Color(4, 0.5, 0.01), Color(100, 100, 100) };
+		const Color_Bytes agx_expected[] = { { 0, 0, 0 }, { 128, 128, 128 }, { 202, 202, 202 },
+			{ 221, 91, 73 }, { 133, 201, 101 }, { 51, 103, 222 }, { 254, 192, 152 }, { 255, 255, 255 } };
+		bool agx_reference_matches = true;
+		for (size_t i = 0; i < agx_inputs.size(); ++i)
+			agx_reference_matches = agx_reference_matches && same_bytes(to_color_bytes(agx_inputs[i], agx), agx_expected[i]);
+		check(agx_reference_matches, "AgX matches independent gray and primary-color reference bytes");
+		bool monotonic_neutral = true;
+		Color previous(0, 0, 0);
+		for (double v : { 0.0, 0.001, 0.01, 0.18, 1.0, 4.0, 16.0, 1000.0 })
+		{
+			const Color display = display_transform(Color(v, v, v), agx);
+			for (int channel = 0; channel < 3; ++channel)
+				monotonic_neutral = monotonic_neutral && display[channel] + 1e-6 >= previous[channel] &&
+					std::abs(display[channel] - display.x()) < 1e-3;
+			previous = display;
+		}
+		check(monotonic_neutral, "AgX gray ramp remains neutral and monotonic");
+		const Color red_highlight = display_transform(Color(1000, 0, 0), agx);
+		check(red_highlight.x() > 0.9 && red_highlight.y() > 0.9 && red_highlight.z() > 0.9,
+			"AgX strongly exposed saturated highlights approach white");
+
+		// Read the written PPM values, rather than checking two in-memory aliases of one helper.
+		std::filesystem::create_directories("output");
+		const std::string ppm_path = "output/__test_display_settings.ppm";
+		const std::vector<Color> colors = { Color(0.01, 0.18, 3), Color(4, 0, 0), Color(0.5, 1, 10) };
+		agx.exposure_ev = 1.25;
+		const bool export_matches = image_io::write_ppm(ppm_path, colors, 3, 1, agx) && ppm_matches_display(ppm_path, colors, 3, 1, agx);
+		std::filesystem::remove(ppm_path);
+		check(export_matches, "saved PPM uses the same exposure and tone mapping as preview pixels");
+
+		rng::seed_thread(5);
+		SceneDesc scene = find_scene("cornell_small")->build();
+		Camera initial = scene.cam;
+		initial.image_width = 16;
+		initial.sample_per_pixel = 16;
+		initial.thread_count = 1;
+		initial.seed = 2002;
+		initial.write_outputs = false;
+		initial.verbose = false;
+		initial.preview_denoise_min_samples = 2;
+		initial.preview_denoise_interval_seconds = 0.0;
+		parse_aov_list("all", initial.aovs);
+		Camera reference = initial;
+		reference.RenderProgressive(scene.world, scene.lights);
+		Camera progressive = initial;
+		progressive.display_settings = agx;
+		RecordingPreview preview;
+		preview.settings = agx;
+		bool guides_match_samples = true, intermediate_filter_matches = true;
+		preview.on_update = [&](const ProgressivePreviewFrame& frame)
+		{
+			if (frame.final || frame.denoised.empty()) return;
+			for (const PixelGuide& guide : progressive.LastGuide())
+				guides_match_samples = guides_match_samples && guide.sample_count == frame.completed_samples;
+			auto settings = initial.denoiser_settings;
+			settings.iterations = std::min(settings.iterations, 2);
+			settings.thread_count = initial.thread_count;
+			intermediate_filter_matches = intermediate_filter_matches && same_linear_pixels(progressive.Denoise(settings), frame.denoised);
+		};
+		progressive.RenderProgressive(scene.world, scene.lights, &preview);
+		check(preview.intermediate_denoise_count() >= 2, "zero preview interval refreshes denoising during multiple passes");
+		bool coherent = !preview.frames.empty(), has_changed_intermediate = false;
+		int previous_samples = 0, final_count = 0;
+		for (const auto& frame : preview.frames)
+		{
+			coherent = coherent && frame.samples >= previous_samples && frame.samples <= initial.sample_per_pixel &&
+				frame.total_samples == initial.sample_per_pixel && frame.raw.size() == reference.LastFramebuffer().size();
+			previous_samples = frame.samples;
+			final_count += frame.final ? 1 : 0;
+			if (!frame.final && !frame.denoised.empty())
+			{
+				coherent = coherent && frame.samples >= initial.preview_denoise_min_samples &&
+					frame.samples < initial.sample_per_pixel && frame.denoised.size() == frame.raw.size();
+				has_changed_intermediate = has_changed_intermediate || !same_linear_pixels(frame.raw, frame.denoised);
+			}
+		}
+		check(coherent && final_count == 1 && preview.frames.back().final && preview.frames.back().samples == 16,
+			"preview publishes coherent increasing sample counts and exactly one completed frame");
+		check(has_changed_intermediate, "intermediate denoising actually filters the noisy linear frame");
+		check(guides_match_samples && intermediate_filter_matches,
+			"intermediate filter consumes the current linear frame and guides from the advertised samples");
+		check(same_linear_pixels(reference.LastFramebuffer(), progressive.LastFramebuffer()),
+			"exposure, AgX and progressive filtering leave raw accumulation bit-identical");
+		check(!progressive.LastDenoised().empty() && same_linear_pixels(reference.LastDenoised(), progressive.LastDenoised()) &&
+			same_linear_pixels(preview.frames.back().denoised, progressive.LastDenoised()),
+			"final preview uses the full-quality final denoise without accumulating filtered pixels");
+		bool same_guides = reference.LastGuide().size() == progressive.LastGuide().size();
+		for (size_t i = 0; same_guides && i < reference.LastGuide().size(); ++i)
+		{
+			const auto& a = reference.LastGuide()[i];
+			const auto& b = progressive.LastGuide()[i];
+			same_guides = a.albedo.e == b.albedo.e && a.normal.e == b.normal.e && a.depth == b.depth &&
+				a.glossiness == b.glossiness && a.variance == b.variance && a.coverage == b.coverage &&
+				a.sample_count == b.sample_count && a.valid == b.valid && a.emitter == b.emitter;
+		}
+		bool same_aovs = true;
+		for (int k = 0; k < static_cast<int>(AOVKind::Count); ++k)
+			same_aovs = same_aovs && same_linear_pixels(reference.LastAOV(static_cast<AOVKind>(k)), progressive.LastAOV(static_cast<AOVKind>(k)));
+		check(same_guides && same_aovs, "progressive presentation preserves all linear AOVs and every guide field");
+
+		Camera saved = initial;
+		saved.write_outputs = true;
+		saved.aovs.clear();
+		saved.output_filename = "output/__test_progressive_display.ppm";
+		saved.progressive_output_mode = Camera::Progressive_Output_Mode::Denoised_With_Raw;
+		RecordingPreview saved_preview;
+		saved_preview.settings = agx; // Model user controls overriding the camera's initial EV 0.
+		saved.RenderProgressive(scene.world, scene.lights, &saved_preview);
+		const std::string raw_path = image_io::add_suffix(saved.output_filename, "_raw");
+		check(ppm_matches_display(saved.output_filename, reference.LastDenoised(), saved.image_width, saved.output_height(), agx) &&
+			ppm_matches_display(raw_path, reference.LastFramebuffer(), saved.image_width, saved.output_height(), agx),
+			"both PPM outputs use the preview's current display settings at render completion");
+		const std::string pfm_path = image_io::replace_extension(saved.output_filename, ".pfm");
+		const std::string filtered_pfm_path = image_io::replace_extension(saved.output_filename, "_denoised.pfm");
+		LinearImage raw_pfm, filtered_pfm;
+		bool linear_export = image_io::read_pfm(pfm_path, raw_pfm) && image_io::read_pfm(filtered_pfm_path, filtered_pfm) &&
+			raw_pfm.pixels.size() == reference.LastFramebuffer().size() && filtered_pfm.pixels.size() == reference.LastDenoised().size();
+		for (size_t i = 0; linear_export && i < raw_pfm.pixels.size(); ++i)
+			for (int channel = 0; channel < 3; ++channel)
+				linear_export = linear_export && raw_pfm.pixels[i][channel] == static_cast<float>(reference.LastFramebuffer()[i][channel]) &&
+					filtered_pfm.pixels[i][channel] == static_cast<float>(reference.LastDenoised()[i][channel]);
+		check(linear_export, "raw and denoised PFM outputs retain linear values regardless of display controls");
+		for (const auto& path : { saved.output_filename, raw_path, pfm_path, filtered_pfm_path })
+			std::filesystem::remove(path);
+
+		Camera throttled = initial;
+		throttled.preview_denoise_interval_seconds = 3600.0;
+		RecordingPreview throttled_preview;
+		throttled.RenderProgressive(scene.world, scene.lights, &throttled_preview);
+		check(throttled_preview.intermediate_denoise_count() == 1 && !throttled_preview.frames.back().denoised.empty(),
+			"time throttle permits the first eligible denoise and never suppresses final denoising");
+		Camera high_threshold = initial;
+		high_threshold.preview_denoise_min_samples = 32;
+		RecordingPreview high_threshold_preview;
+		high_threshold.RenderProgressive(scene.world, scene.lights, &high_threshold_preview);
+		check(high_threshold_preview.intermediate_denoise_count() == 0 && !high_threshold_preview.frames.back().denoised.empty(),
+			"minimum sample threshold suppresses early previews but still delivers final denoising");
+
+		Camera raw_preview = initial;
+		raw_preview.preview_denoise = false;
+		RecordingPreview raw_display;
+		raw_preview.RenderProgressive(scene.world, scene.lights, &raw_display);
+		check(raw_display.intermediate_denoise_count() == 0 && same_linear_pixels(reference.LastDenoised(), raw_preview.LastDenoised()),
+			"raw preview mode disables intermediate filtering while preserving denoised output");
+		raw_preview.progressive_output_mode = Camera::Progressive_Output_Mode::Raw;
+		RecordingPreview entirely_raw;
+		raw_preview.RenderProgressive(scene.world, scene.lights, &entirely_raw);
+		check(entirely_raw.intermediate_denoise_count() == 0 && entirely_raw.frames.back().denoised.empty() && raw_preview.LastDenoised().empty(),
+			"raw preview plus raw output skips filtering entirely");
+		Camera disabled = initial;
+		disabled.denoiser_settings.enabled = false;
+		RecordingPreview disabled_preview;
+		disabled.RenderProgressive(scene.world, scene.lights, &disabled_preview);
+		check(disabled_preview.intermediate_denoise_count() == 0 &&
+			(disabled_preview.frames.back().denoised.empty() || same_linear_pixels(disabled_preview.frames.back().denoised, reference.LastFramebuffer())),
+			"disabled denoiser never schedules an intermediate filter or changes final radiance");
+
+		Camera closed = initial;
+		closed.progressive_output_mode = Camera::Progressive_Output_Mode::Raw;
+		RecordingPreview closed_preview;
+		closed_preview.close_after_first_pass = true;
+		closed.RenderProgressive(scene.world, scene.lights, &closed_preview);
+		check(closed_preview.updates_after_close == 0 && closed_preview.intermediate_denoise_count() == 0 &&
+			closed.LastSampleCount() == 16 && closed.LastDenoised().empty() &&
+			same_linear_pixels(reference.LastFramebuffer(), closed.LastFramebuffer()),
+			"closing preview stops refresh/filter work and lets the linear render finish safely");
 	}
 
 	void test_aovs()
@@ -1454,6 +1987,8 @@ int run_unit_tests(const std::string& filter)
 		{ "rng", test_rng },
 		{ "pdf", test_pdf_normalization },
 		{ "environment", test_environment_pdf },
+		{ "environment_cdf_guide", test_environment_cdf_guide },
+		{ "environment_boundaries", test_environment_boundaries },
 		{ "light", test_light_pdf },
 		{ "lightsampler", test_light_sampler },
 		{ "tangent", test_sphere_tangent_frame },
@@ -1464,6 +1999,7 @@ int run_unit_tests(const std::string& filter)
 		{ "roulette", test_russian_roulette },
 		{ "alloc", test_hot_path_allocations },
 		{ "denoise", test_denoiser },
+		{ "postprocess", test_postprocess },
 		{ "aov", test_aovs },
 	};
 
